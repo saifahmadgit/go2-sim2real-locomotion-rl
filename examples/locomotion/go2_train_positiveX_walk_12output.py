@@ -14,10 +14,10 @@ try:
 except (metadata.PackageNotFoundError, ImportError) as e:
     raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
 
+from go2_env_positiveX_walk_12output import Go2Env
 from rsl_rl.runners import OnPolicyRunner
-import genesis as gs
 
-from go2_env_test4 import Go2Env
+import genesis as gs
 
 
 def get_train_cfg(exp_name, max_iterations):
@@ -88,10 +88,10 @@ def get_cfgs():
     #   dof_vel: 1.5 * 0.05 * 1.0 = 0.075 obs-space → 1.5 rad/s raw ✓
     obs_noise_level = 1.0  # FIX: was 0.2
     obs_noise = {
-        "ang_vel": 0.2,       # official: 0.2 rad/s
-        "gravity": 0.05,      # official: 0.05
-        "dof_pos": 0.01,      # official: 0.01 rad (was 0.02)
-        "dof_vel": 1.5,       # FIX: was 1.0, official: 1.5 rad/s
+        "ang_vel": 0.2,  # official: 0.2 rad/s
+        "gravity": 0.05,  # official: 0.05
+        "dof_pos": 0.01,  # official: 0.01 rad (was 0.02)
+        "dof_vel": 1.5,  # FIX: was 1.0, official: 1.5 rad/s
     }
 
     action_noise_enable = True
@@ -102,8 +102,8 @@ def get_cfgs():
     push_force_range = [-100.0, 100.0]
 
     init_pose_enable = True
-    init_pos_z_range = [0.38, 0.45]      # slight z variation (was fixed 0.42)
-    init_euler_range = [-5.0, 5.0]        # FIX: ±5° tilt (was 0.0 — no perturbation)
+    init_pos_z_range = [0.38, 0.45]  # slight z variation (was fixed 0.42)
+    init_euler_range = [-5.0, 5.0]  # FIX: ±5° tilt (was 0.0 — no perturbation)
 
     # FIX: mass DR now enabled with curriculum scaling
     mass_enable = True  # was False
@@ -118,40 +118,30 @@ def get_cfgs():
     curriculum_enable = True
     curriculum_cfg = {
         "enabled": curriculum_enable,
-
         "level_init": 0.10,
         "level_min": 0.0,
         "level_max": 1.0,
-
         "ema_alpha": 0.03,
-
         # FIX: ready_timeout_rate 0.90 → 0.70 (was too strict, kept curriculum stuck)
-        "ready_timeout_rate": 0.70,   
+        "ready_timeout_rate": 0.70,
         "ready_tracking": 0.70,
         "ready_fall_rate": 0.30,
         "ready_streak": 2,
-
         "hard_fall_rate": 0.35,
         "hard_streak": 2,
-
         "step_up": 0.02,
         "step_down": 0.03,
         "cooldown_updates": 2,
-
         "update_every_episodes": 4096,
-
         "mix_prob_current": 0.80,
         "mix_level_low": 0.00,
         "mix_level_high": 0.50,
-
         "friction_easy": [0.7, 0.8],
         "kp_easy": [0.90 * kp_nominal, 1.10 * kp_nominal],
         "kd_easy": [0.75 * kd_nominal, 1.25 * kd_nominal],
-
         # NEW: mass DR easy ranges (small perturbation at start)
         "mass_shift_easy": [-0.1, 0.1],
         "com_shift_easy": [-0.005, 0.005],
-
         "push_start": 0.30,
         "push_interval_easy_s": 6.0,
     }
@@ -161,18 +151,14 @@ def get_cfgs():
     # ================================================================
     env_cfg = {
         "num_actions": 12,
-
         "kp": kp_nominal,
         "kd": kd_nominal,
-
         "simulate_action_latency": simulate_action_latency,
-
         # Foot link names — must match URDF exactly.
         # Used by feet_air_time reward. If these don't match your URDF,
         # the env will raise a RuntimeError listing available link names.
         "foot_names": ["FR_calf", "FL_calf", "RR_calf", "RL_calf"],
         "foot_contact_threshold": 3.0,  # N, force threshold for ground contact
-
         "default_joint_angles": {
             "FL_hip_joint": 0.0,
             "FR_hip_joint": 0.0,
@@ -201,19 +187,16 @@ def get_cfgs():
             "RL_thigh_joint",
             "RL_calf_joint",
         ],
-
-        "termination_if_roll_greater_than": 20,   # degrees (your original, intentionally tight)
-        "termination_if_pitch_greater_than": 20,   # degrees
+        "termination_if_roll_greater_than": 20,  # degrees (your original, intentionally tight)
+        "termination_if_pitch_greater_than": 20,  # degrees
         "termination_if_z_vel_greater_than": 100.0,
         "termination_if_y_vel_greater_than": 100.0,
-
         "base_init_pos": [0.0, 0.0, 0.42],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "episode_length_s": 20.0,
         "resampling_time_s": 10.0,  # FIX: was 4.0, official uses 10s
         "action_scale": 0.25,
         "clip_actions": 100.0,
-
         "curriculum": curriculum_cfg,
     }
 
@@ -245,7 +228,7 @@ def get_cfgs():
         "num_obs": 45,
         "obs_scales": {
             "lin_vel": 2.0,
-            "ang_vel": 0.25,   # keeping your value (official legged_gym also uses 0.25)
+            "ang_vel": 0.25,  # keeping your value (official legged_gym also uses 0.25)
             "dof_pos": 1.0,
             "dof_vel": 0.05,
         },
@@ -259,33 +242,26 @@ def get_cfgs():
         "base_height_target": 0.3,
         "feet_height_target": 0.075,
         "feet_air_time_target": 0.5,  # NEW: target swing duration per foot (seconds)
-
         "reward_scales": {
             # --- Tracking (increased to match official weighting) ---
-            "tracking_lin_vel": 1.5,       # was 1.0, official: 1.5
-            "tracking_ang_vel": 0.75,      # was 0.2, official: 0.75
-
+            "tracking_lin_vel": 1.5,  # was 1.0, official: 1.5
+            "tracking_ang_vel": 0.75,  # was 0.2, official: 0.75
             # --- Regularization ---
-            "lin_vel_z": -2.0,             # was -1.0, official: -2.0
-            "base_height": -50.0,          # kept (your value for Go2)
-            "action_rate": -0.01,          # was -0.005, official: -0.01
-            "similar_to_default": -0.1,    # was -0.1, official: ~-0.5 to -0.7
-            "orientation_penalty": -2.5,   # was -1.0, bumped (covers flat_orientation)
-            "dof_acc": -2.5e-7,            # was 0.0 (disabled), now active
-            "dof_vel": -5e-4,             # was 0.0 (disabled), now active
-
+            "lin_vel_z": -2.0,  # was -1.0, official: -2.0
+            "base_height": -50.0,  # kept (your value for Go2)
+            "action_rate": -0.01,  # was -0.005, official: -0.01
+            "similar_to_default": -0.1,  # was -0.1, official: ~-0.5 to -0.7
+            "orientation_penalty": -2.5,  # was -1.0, bumped (covers flat_orientation)
+            "dof_acc": -2.5e-7,  # was 0.0 (disabled), now active
+            "dof_vel": -5e-4,  # was 0.0 (disabled), now active
             # --- NEW: gait quality ---
-            "feet_air_time": 2.0
-            ,          # official: 0.1 (encourages proper swing timing)
-
+            "feet_air_time": 2.0,  # official: 0.1 (encourages proper swing timing)
             # --- NEW: energy efficiency ---
-            "energy": -2e-5,               # 
-
+            "energy": -2e-5,  #
             # --- Existing ---
             "torque_load": -0.001,
-
             # --- Standing (activate if using standing envs) ---
-            "stand_still": 0.0,           # was 0.0, now penalizes joint deviation when stopped
+            "stand_still": 0.0,  # was 0.0, now penalizes joint deviation when stopped
         },
     }
 
@@ -294,16 +270,13 @@ def get_cfgs():
     # ================================================================
     command_cfg = {
         "num_commands": 3,
-
         # FULL ranges (hard max — curriculum ramps from 10% to 100%)
-        "lin_vel_x_range": [-1.0, 1.0],   # FIX: was [0.0, 1.0] forward-only
-        "lin_vel_y_range": [-0.3, 0.3],    # FIX: was [0, 0] — no lateral
-        "ang_vel_range": [-1.0, 1.0],      # FIX: was [0, 0] — no turning
-
+        "lin_vel_x_range": [-1.0, 1.0],  # FIX: was [0.0, 1.0] forward-only
+        "lin_vel_y_range": [-0.3, 0.3],  # FIX: was [0, 0] — no lateral
+        "ang_vel_range": [-1.0, 1.0],  # FIX: was [0, 0] — no turning
         # NEW: command curriculum (ranges expand with curriculum level)
         "cmd_curriculum": True,
         "cmd_curriculum_start_frac": 0.1,  # start at 10% of full range
-
         # NEW: standing environments (10% of envs get zero commands)
         "rel_standing_envs": 0.1,
     }
@@ -336,15 +309,24 @@ def main():
     print("=" * 70)
 
     dr_items = {
-        "Friction (HARD)":        ("friction_range",   lambda: str(env_cfg["friction_range"])),
-        "Kp range (HARD)":        ("kp_range",         lambda: str(env_cfg["kp_range"])),
-        "Kd range (HARD)":        ("kd_range",         lambda: str(env_cfg["kd_range"])),
-        "Obs noise (HARD)":       ("obs_noise",        lambda: f'level={env_cfg.get("obs_noise_level", 0.0)}  {env_cfg["obs_noise"]}'),
-        "Action noise (HARD)":    ("action_noise_std",  lambda: f'std={env_cfg["action_noise_std"]} rad'),
-        "Pushes (HARD)":          ("push_force_range",  lambda: f'{env_cfg["push_force_range"]} N  every {env_cfg["push_interval_s"]}s'),
-        "Mass shift (HARD)":      ("mass_shift_range",  lambda: f'{env_cfg["mass_shift_range"]} kg'),
-        "CoM shift (HARD)":       ("com_shift_range",   lambda: f'{env_cfg["com_shift_range"]} m'),
-        "Init pose":              ("init_euler_range",   lambda: f'z={env_cfg["init_pos_z_range"]}  euler=±{env_cfg["init_euler_range"][1]}°'),
+        "Friction (HARD)": ("friction_range", lambda: str(env_cfg["friction_range"])),
+        "Kp range (HARD)": ("kp_range", lambda: str(env_cfg["kp_range"])),
+        "Kd range (HARD)": ("kd_range", lambda: str(env_cfg["kd_range"])),
+        "Obs noise (HARD)": (
+            "obs_noise",
+            lambda: f"level={env_cfg.get('obs_noise_level', 0.0)}  {env_cfg['obs_noise']}",
+        ),
+        "Action noise (HARD)": ("action_noise_std", lambda: f"std={env_cfg['action_noise_std']} rad"),
+        "Pushes (HARD)": (
+            "push_force_range",
+            lambda: f"{env_cfg['push_force_range']} N  every {env_cfg['push_interval_s']}s",
+        ),
+        "Mass shift (HARD)": ("mass_shift_range", lambda: f"{env_cfg['mass_shift_range']} kg"),
+        "CoM shift (HARD)": ("com_shift_range", lambda: f"{env_cfg['com_shift_range']} m"),
+        "Init pose": (
+            "init_euler_range",
+            lambda: f"z={env_cfg['init_pos_z_range']}  euler=±{env_cfg['init_euler_range'][1]}°",
+        ),
     }
     for label, (key, fmt) in dr_items.items():
         status = f"ON   {fmt()}" if key in env_cfg else "OFF"
@@ -360,8 +342,10 @@ def main():
     if cc.get("enabled", False):
         print(f"  level_init             : {cc.get('level_init')}")
         print(f"  update_every_episodes  : {cc.get('update_every_episodes')}")
-        print(f"  ready thresholds       : timeout>={cc.get('ready_timeout_rate')}, "
-              f"tracking>={cc.get('ready_tracking')}, fall<={cc.get('ready_fall_rate')}")
+        print(
+            f"  ready thresholds       : timeout>={cc.get('ready_timeout_rate')}, "
+            f"tracking>={cc.get('ready_tracking')}, fall<={cc.get('ready_fall_rate')}"
+        )
         print(f"  hard threshold         : fall>={cc.get('hard_fall_rate')}")
         print(f"  step_up / step_down    : {cc.get('step_up')} / {cc.get('step_down')}")
         print(f"  mix_prob_current       : {cc.get('mix_prob_current')}")
@@ -372,7 +356,7 @@ def main():
 
     # Commands
     print("-" * 70)
-    print(f"  Commands:")
+    print("  Commands:")
     print(f"    lin_vel_x            : {command_cfg['lin_vel_x_range']}")
     print(f"    lin_vel_y            : {command_cfg['lin_vel_y_range']}")
     print(f"    ang_vel              : {command_cfg['ang_vel_range']}")
@@ -382,12 +366,25 @@ def main():
 
     # Rewards
     print("-" * 70)
-    print(f"  Rewards (pre-dt scaling):")
+    print("  Rewards (pre-dt scaling):")
     for name, scale in reward_cfg["reward_scales"].items():
         marker = "NEW" if name in ["feet_air_time", "energy"] else "   "
-        marker2 = "FIX" if name in ["tracking_lin_vel", "tracking_ang_vel", "lin_vel_z",
-                                      "action_rate", "similar_to_default", "orientation_penalty",
-                                      "dof_acc", "dof_vel", "stand_still"] else "   "
+        marker2 = (
+            "FIX"
+            if name
+            in [
+                "tracking_lin_vel",
+                "tracking_ang_vel",
+                "lin_vel_z",
+                "action_rate",
+                "similar_to_default",
+                "orientation_penalty",
+                "dof_acc",
+                "dof_vel",
+                "stand_still",
+            ]
+            else "   "
+        )
         m = marker if marker.strip() else marker2
         print(f"    [{m}] {name:25s}: {scale}")
     print("=" * 70 + "\n")
