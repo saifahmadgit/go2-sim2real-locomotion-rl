@@ -24,7 +24,7 @@ except (metadata.PackageNotFoundError, ImportError) as e:
     ) from e
 
 import genesis as gs
-from go2_env_stair5 import DEFAULT_TERRAIN_CFG, Go2Env
+from go2_env_stair5 import Go2Env, DEFAULT_TERRAIN_CFG
 from rsl_rl.runners import OnPolicyRunner
 
 # ============================================================
@@ -484,7 +484,10 @@ def main():
         and isinstance(env_cfg["terrain"], dict)
         and env_cfg["terrain"].get("enabled", False)
     )
-    trained_up_only = trained_with_terrain and env_cfg["terrain"].get("up_only", False)
+    trained_up_only = (
+        trained_with_terrain
+        and env_cfg["terrain"].get("up_only", False)
+    )
     trained_priv_obs = obs_cfg.get("num_privileged_obs", None)
 
     # ================================================================
@@ -568,10 +571,8 @@ def main():
         up_only = tc.get("up_only", False)
         step_min = tc.get("step_height_min", 0.10)
         step_max = tc.get("step_height_max", 0.20)
-        print(
-            f"[INFO] Terrain: {num_rows} rows ({'UP-ONLY' if up_only else 'UP-DOWN'}), "
-            f"step heights {step_min * 100:.0f}cm → {step_max * 100:.0f}cm"
-        )
+        print(f"[INFO] Terrain: {num_rows} rows ({'UP-ONLY' if up_only else 'UP-DOWN'}), "
+              f"step heights {step_min*100:.0f}cm → {step_max*100:.0f}cm")
 
     # Disable termination for eval
     env_cfg["termination_if_roll_greater_than"] = 1e9
@@ -651,7 +652,7 @@ def main():
         total_elev = num_flights * num_steps * step_h
         print(
             f"\n[Terrain] Spawning at difficulty {clamped} "
-            f"(step: {step_h * 100:.1f}cm, "
+            f"(step: {step_h*100:.1f}cm, "
             f"{'UP-ONLY' if up_only else 'UP-DOWN'}, "
             f"total elevation: {total_elev:.2f}m)"
         )
@@ -726,12 +727,10 @@ def main():
     print(f"  Critic obs dim  : {obs_cfg.get('num_privileged_obs', 'N/A')}")
     print(f"  Terrain enabled : {env._use_terrain}")
     if env._use_terrain:
-        print(
-            f"  Terrain mode    : {'UP-ONLY' if env._terrain_info.get('up_only') else 'UP-DOWN'}"
-        )
+        print(f"  Terrain mode    : {'UP-ONLY' if env._terrain_info.get('up_only') else 'UP-DOWN'}")
         print(f"  Terrain rows    : {env._num_terrain_rows}")
         print(
-            f"  Step heights    : {[f'{h * 100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
+            f"  Step heights    : {[f'{h*100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
         )
         print(f"  Current diff    : {terrain_state['difficulty']}")
         if hasattr(env, "_scan_n") and env._scan_n > 0:
@@ -791,7 +790,7 @@ def main():
                             total_elev = num_fl * num_st * sh
                             print(
                                 f"\n[Terrain] Respawning at difficulty {clamped} "
-                                f"(step: {sh * 100:.1f}cm, elevation: {total_elev:.2f}m)"
+                                f"(step: {sh*100:.1f}cm, elevation: {total_elev:.2f}m)"
                             )
                             respawn_at_difficulty(env, clamped)
                             action_buffer.clear()
@@ -935,7 +934,7 @@ def main():
                         parts.append(f"pitch={pitch:.1f}° roll={roll:.1f}°")
 
                     if pls_enabled:
-                        stiffness_actions = actions_to_apply[0, env.num_pos_actions :]
+                        stiffness_actions = actions_to_apply[0, env.num_pos_actions:]
                         kp_per_leg = (
                             env.pls_kp_default
                             + stiffness_actions * env.pls_kp_action_scale

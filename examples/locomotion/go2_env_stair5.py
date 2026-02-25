@@ -39,12 +39,12 @@ DEFAULT_TERRAIN_CFG = {
     "up_only": True,
     "horizontal_scale": 0.05,
     "vertical_scale": 0.005,
-    "num_difficulty_rows": 11,
+    "num_difficulty_rows": 13,
     "row_width_m": 6.0,
-    "step_depth_m": 0.28,
+    "step_depth_m": 0.25,
     "num_steps": 10,
     "num_flights": 4,
-    "step_height_min": 0.10,
+    "step_height_min": 0.02,
     "step_height_max": 0.20,
     "flat_before_m": 1.0,
     "flat_top_m": 0.5,
@@ -71,7 +71,22 @@ def build_stair_terrain(terrain_cfg: dict) -> tuple:
     Build a numpy heightfield with multiple difficulty rows.
 
     ========================= CHANGED (v5) =========================
-    
+    Supports TWO modes controlled by terrain_cfg["up_only"]:
+
+    up_only=True (NEW — stair-up specialist):
+    ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
+    │ flat │ ↑↑↑  │ plat │ ↑↑↑  │ plat │ ↑↑↑  │ plat │ flat │
+    │before│stairs│ form │stairs│ form │stairs│ form │after │
+    └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
+    Height monotonically increases. Each flight starts from
+    where the previous ended. Robot only ever climbs UP.
+
+    up_only=False (original v4 behaviour):
+    ┌──────┬──────┬──────┬──────┬──────┬──────┐
+    │ flat │ ↑↑↑  │ flat │ ↓↓↓  │ flat │ ...  │
+    │before│stairs│ top  │stairs│ gap  │      │
+    └──────┴──────┴──────┴──────┴──────┴──────┘
+    ============================================================
 
     Returns:
         heightfield: np.ndarray (int16)
@@ -85,11 +100,11 @@ def build_stair_terrain(terrain_cfg: dict) -> tuple:
 
     # Stair geometry
     step_depth_m = terrain_cfg.get("step_depth_m", 0.28)
-    num_steps = terrain_cfg.get("num_steps", 12)
+    num_steps = terrain_cfg.get("num_steps", 6)
     num_flights = terrain_cfg.get("num_flights", 3)
-    flat_before_m = terrain_cfg.get("flat_before_m", 1.0)
-    flat_top_m = terrain_cfg.get("flat_top_m", 0.5)        # platform between flights
-    flat_gap_m = terrain_cfg.get("flat_gap_m", 0.5)        # (only used in up-down mode)
+    flat_before_m = terrain_cfg.get("flat_before_m", 2.0)
+    flat_top_m = terrain_cfg.get("flat_top_m", 1.5)        # platform between flights
+    flat_gap_m = terrain_cfg.get("flat_gap_m", 1.5)        # (only used in up-down mode)
     flat_after_m = terrain_cfg.get("flat_after_m", 2.0)
 
     step_height_min = terrain_cfg.get("step_height_min", 0.10)
