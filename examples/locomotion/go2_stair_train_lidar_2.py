@@ -1,27 +1,26 @@
 """
-train_stair4_lidar.py
+train_stair5_info.py
 =====================
-Training script for Go2 stair climbing with LIDAR observations
-in both actor and critic networks.
+Training script for Go2 stair climbing with 4-value stair info.
 
-Key design — Minimal 5×3 grid for sim-to-real robustness:
-  - Actor obs: 49 proprio + 15 LIDAR terrain scan = 64 dims
-  - Critic obs includes dense privileged scan (45 pts)
-  - Aggressive noise/dropout forces proprioceptive fallback
-  - Fewer, larger cells → more LIDAR points per cell → smaller sim-to-real gap
+Actor obs (53 dims):
+  ang_vel(3) + gravity(3) + commands(3) + dof_pos(12) + dof_vel(12)
+  + actions(16) + stair_info(4)
 
-Grid layout (body frame, forward = +x):
-    x: [0.00, 0.15, 0.30, 0.50, 0.80] m    5 rows (~stair-step spacing)
-    y: [-0.15, 0.00, 0.15] m                3 cols (center + sides)
-    Cell size ~15cm → 8-10 L1 points per cell even in near field
+  stair_info = [edge_distance, stair_height, stair_depth, direction]
+    - edge_distance: 0..0.27m scaled by 1/0.27 (from LIDAR edge detection)
+    - stair_height:  always positive, scaled by 1/0.20 (user-provided)
+    - stair_depth:   always positive, scaled by 1/0.30 (user-provided)
+    - direction:     +1 ascending, -1 descending, 0 flat
 
-Sim-to-Real Deployment Pipeline:
-  1. Train with this script (actor learns to use 15-point terrain scan)
-  2. Export actor network weights
-  3. On real Go2: L1 point cloud → project to 5×3 body-frame grid →
-     compute height per cell → subtract base z → clip → scale
-  4. Feed into actor network alongside proprioceptive obs
-  5. Policy outputs joint position targets (same as before)
+Curriculum: stair HEIGHT only (2cm → 20cm across 13 rows)
+Stair DEPTH: variable 0.22–0.30m per row (not curriculum-linked)
+
+Sim-to-Real Deployment:
+  1. Train with this script
+  2. On real Go2: measure stair height & depth, input as constants
+  3. LIDAR edge detector provides edge_distance & direction automatically
+  4. Policy obs = 49 proprio + 4 stair info = 53 dims
 """
 
 import argparse
@@ -43,7 +42,7 @@ except (metadata.PackageNotFoundError, ImportError) as e:
 from rsl_rl.runners import OnPolicyRunner
 import genesis as gs
 
-from go2_env_stair4_lidar import Go2Env
+from go2_env_stair_lidar_2 import Go2Env
 
 
 def get_train_cfg(exp_name, max_iterations, resume_path=None):
@@ -107,68 +106,46 @@ def get_cfgs():
     torque_limits = [23.7, 23.7, 45.0] * 4
 
     # ================================================================
-    # LIDAR scan configuration  ← MINIMAL 5×3 GRID
+    # Stair info configuration (replaces LIDAR grid)
     #
-    # Optimized for sim-to-real transfer on the Go2 L1 LIDAR:
+    # 4 values: edge_distance, stair_height, stair_depth, direction
     #
-    # Actor scan: 5×3 = 15 points, forward-biased, non-uniform x spacing
-    #   - x_points chosen to align with typical stair tread depths (~25cm)
-    #   - 15cm cell size ensures 8-10 LIDAR points per cell even near-field
-    #   - 3 lateral columns detect yaw misalignment
-    #   - On real robot: L1 point cloud → voxel filter → project to this
-    #     exact grid → height per cell → subtract base z
+    # Edge detection: scans 0→0.27m ahead, finds first height change.
+    # Height & depth: from terrain config per row (real robot: user input).
+    # Direction: auto from height change sign.
     #
-    # Critic scan: 9×5 = 45 points, dense surround (privileged, not deployed)
-    #
-    # Noise model is AGGRESSIVE to prevent policy overfitting sim:
-    #   - 15% per-cell dropout (was 5%): many cells go missing
-    #   - 5% full blackout: entire scan dead, must use proprio alone
-    #   - 2cm Gaussian noise (matches L1 spec)
-    #   - 10% latency (processing delay)
+    # Noise is applied only to LIDAR-sourced values (edge, direction)
+    # with minor noise on user-measured values (height, depth).
     # ================================================================
-    lidar_cfg = {
+    stair_info_cfg = {
         "enabled": True,
 
-        "actor_scan": {
-            # Non-uniform x spacing: denser near feet, sparser far ahead
-            "x_points": [0.0, 0.15, 0.30, 0.50, 0.80],   # 5 rows, ~stair-step spacing
-            "y_points": [-0.15, 0.0, 0.15],                # 3 cols, center + sides
+        "edge_detection": {
+            "max_range": 0.27,       # LIDAR reliable range
+            "threshold": 0.02,       # 2cm height change = edge
+            "num_samples": 14,       # ~2cm spacing over 0.27m
         },
 
-        "critic_scan": {
-            "num_x": 9,                      # Dense forward/backward
-            "num_y": 5,                      # Wide lateral
-            "x_range": [-0.4, 0.8],          # See behind too (privileged)
-            "y_range": [-0.3, 0.3],          # Wider lateral view
-        },
+        # Observation scaling (bring to ~[0,1] range)
+        "edge_dist_scale": 3.7,     # 1/0.27
+        "height_scale": 5.0,        # 1/0.20
+        "depth_scale": 3.3,         # 1/0.30
+        "direction_scale": 1.0,     # already [-1, 0, +1]
 
         "noise": {
-            "height_noise_std": 0.02,        # ±2cm (matches L1 accuracy spec)
-            "dropout_prob": 0.15,            # 15% per-cell dropout (AGGRESSIVE)
-            "full_blackout_prob": 0.05,      # 5% entire scan dead (forces proprio fallback)
-            "latency_prob": 0.1,             # 10% chance of 1-step-old scan
-            "vertical_offset_std": 0.01,     # 1cm mounting vibration
+            "edge_noise_std": 0.04,         # ~15% of 0.27m range
+            "height_noise_std": 0.01,       # ±5% of 0.20m max
+            "depth_noise_std": 0.01,        # ±5% of 0.30m
+            "direction_flip_prob": 0.03,    # 3% wrong direction
+            "full_blackout_prob": 0.05,     # 5% LIDAR dead
+            "latency_prob": 0.10,           # 10% stale data
         },
-
-        "height_clip": 1.0,                 # Clip heights to ±1.0m
-        "height_scale": 1.0,                # No extra scaling (heights in metres)
     }
 
-    num_actor_lidar = 5 * 3    # 15 (from x_points × y_points)
-    num_critic_lidar = lidar_cfg["critic_scan"]["num_x"] * lidar_cfg["critic_scan"]["num_y"]  # 45
+    num_stair_info = 4  # edge_dist, height, depth, direction
 
     # ================================================================
-    # Height scan config (legacy, kept for backward compat in terrain builder)
-    # ================================================================
-    height_scan_cfg = {
-        "num_x": 9,
-        "num_y": 5,
-        "x_range": [-0.4, 0.8],
-        "y_range": [-0.3, 0.3],
-    }
-
-    # ================================================================
-    # Terrain config
+    # Terrain config (with per-row variable depth)
     # ================================================================
     terrain_cfg = {
         "enabled": True,
@@ -176,16 +153,15 @@ def get_cfgs():
         "vertical_scale": 0.005,
         "num_difficulty_rows": 13,
         "row_width_m": 6.0,
-        "step_depth_m": 0.25,
+        "step_depth_range": [0.22, 0.30],   # variable depth, NOT curriculum-linked
         "num_steps": 6,
         "num_flights": 4,
-        "step_height_min": 0.02,
-        "step_height_max": 0.20,
+        "step_height_min": 0.02,             # curriculum: easy
+        "step_height_max": 0.20,             # curriculum: hard
         "flat_before_m": 2.0,
         "flat_top_m": 1.5,
         "flat_gap_m": 1.5,
         "flat_after_m": 2.0,
-        "height_scan": height_scan_cfg,
     }
 
     # ================================================================
@@ -216,7 +192,7 @@ def get_cfgs():
     push_duration_s = [0.05, 0.2]
 
     # ================================================================
-    # Curriculum
+    # Curriculum (HEIGHT only)
     # ================================================================
     curriculum_cfg = {
         "enabled": True,
@@ -274,6 +250,10 @@ def get_cfgs():
         "foot_names": ["FR_calf", "FL_calf", "RR_calf", "RL_calf"],
         "foot_contact_threshold": 3.0,
 
+        # Penalize contact on front thigh links (prevents knee-planting on stairs)
+        "body_contact_names": ["FR_thigh", "FL_thigh"],
+        "body_contact_threshold": 1.0,
+
         "default_joint_angles": {
             "FL_hip_joint": 0.0, "FR_hip_joint": 0.0,
             "RL_hip_joint": 0.0, "RR_hip_joint": 0.0,
@@ -301,16 +281,10 @@ def get_cfgs():
         "action_scale": 0.25,
         "clip_actions": 100.0,
 
-        # --- Terrain ---
         "terrain": terrain_cfg,
-
-        # --- LIDAR ---  ← NEW
-        "lidar": lidar_cfg,
-
-        # --- Curriculum ---
+        "stair_info": stair_info_cfg,
         "curriculum": curriculum_cfg,
 
-        # --- DR ---
         "friction_range": friction_range,
         "kp_factor_range": kp_factor_range,
         "kd_factor_range": kd_factor_range,
@@ -339,25 +313,18 @@ def get_cfgs():
     }
 
     # ================================================================
-    # Observation config  ← UPDATED for 5×3 LIDAR
+    # Observation config
     # ================================================================
-    # Proprioceptive (same as before):
-    #   ang_vel(3) + gravity(3) + commands(3) + dof_pos(12) + dof_vel(12)
-    #   + actions(16) = 49
     num_proprio = 3 + 3 + 3 + 12 + 12 + num_actions_total  # 49
+    num_obs = num_proprio + num_stair_info                   # 49 + 4 = 53
 
-    # Actor obs = proprioceptive + actor LIDAR scan (5×3 = 15)
-    num_obs = num_proprio + num_actor_lidar                  # 49 + 15 = 64
-
-    # Privileged extra (critic only):
+    # Privileged extra:
     #   lin_vel(3) + friction(1) + kp_factors(12) + kd_factors(12)
     #   + motor_strength(12) + mass_shift(1) + com_shift(3) + leg_mass(4)
     #   + gravity_offset(3) + push_force(3) + delay(1) + terrain_row(1)
-    #   + critic_lidar_scan(45)
-    num_privileged_extra = (3 + 1 + 12 + 12 + 12 + 1 + 3 + 4 + 3 + 3 + 1
-                           + 1                      # terrain_row
-                           + num_critic_lidar)       # critic LIDAR scan (45)
-    num_privileged_obs = num_obs + num_privileged_extra
+    #   + clean_stair_info(4)
+    num_privileged_extra = 3 + 1 + 12 + 12 + 12 + 1 + 3 + 4 + 3 + 3 + 1 + 1 + num_stair_info
+    num_privileged_obs = num_obs + num_privileged_extra       # 53 + 60 = 113
 
     obs_cfg = {
         "num_obs": num_obs,
@@ -376,7 +343,7 @@ def get_cfgs():
     reward_cfg = {
         "tracking_sigma": 0.25,
         "base_height_target": 0.3,
-        "feet_height_target": 0.12,
+        "feet_height_target": 0.15,
         "feet_air_time_target": 0.1,
         "lin_vel_z_deadzone": 0.15,
 
@@ -401,6 +368,7 @@ def get_cfgs():
             "stand_still": -0.5,
             "stand_still_vel": -2.0,
             "feet_stance": -0.3,
+            "body_contact": -2.0,
         },
     }
 
@@ -422,7 +390,7 @@ def get_cfgs():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v4-lidar")
+    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v5-info")
     parser.add_argument("-B", "--num_envs", type=int, default=4096)
     parser.add_argument("--max_iterations", type=int, default=10000)
     parser.add_argument("--resume", type=str, default=None)
@@ -442,80 +410,52 @@ def main():
     # Print config summary
     # ================================================================
     print("\n" + "=" * 70)
-    print("  TRAINING CONFIG — STAIR CLIMBING v4 + LIDAR (5×3 sim-to-real)")
+    print("  TRAINING CONFIG — STAIR CLIMBING v5 (4-value stair info)")
     print("=" * 70)
 
-    lidar = env_cfg.get("lidar", {})
-    if lidar.get("enabled"):
-        a_cfg = lidar.get("actor_scan", {})
-        c_cfg = lidar.get("critic_scan", {})
-        n_cfg = lidar.get("noise", {})
-        # Support both x_points and num_x formats
-        if "x_points" in a_cfg:
-            na = len(a_cfg["x_points"]) * len(a_cfg["y_points"])
-            actor_desc = f"{len(a_cfg['x_points'])}×{len(a_cfg['y_points'])} = {na} pts"
-        else:
-            na = a_cfg.get("num_x", 0) * a_cfg.get("num_y", 0)
-            actor_desc = f"{a_cfg.get('num_x',0)}×{a_cfg.get('num_y',0)} = {na} pts"
-        nc = c_cfg.get("num_x", 0) * c_cfg.get("num_y", 0)
-        print(f"  {'LIDAR':30s}: ENABLED (5×3 sim-to-real)")
-        print(f"    Actor scan           : {actor_desc}")
-        if "x_points" in a_cfg:
-            print(f"      x_points           : {a_cfg['x_points']}")
-            print(f"      y_points           : {a_cfg['y_points']}")
-        else:
-            print(f"      x_range            : {a_cfg.get('x_range')}")
-            print(f"      y_range            : {a_cfg.get('y_range')}")
-        print(f"    Critic scan          : {c_cfg.get('num_x',0)}×{c_cfg.get('num_y',0)} = {nc} pts (privileged)")
-        print(f"    Noise (AGGRESSIVE sim-to-real):")
-        print(f"      height_noise_std   : {n_cfg.get('height_noise_std', 0)}m (L1 accuracy: ±2cm)")
-        print(f"      dropout_prob       : {n_cfg.get('dropout_prob', 0)} (per-cell)")
-        print(f"      full_blackout_prob : {n_cfg.get('full_blackout_prob', 0)} (entire scan)")
-        print(f"      latency_prob       : {n_cfg.get('latency_prob', 0)} (processing delay)")
-        print(f"      vertical_offset    : {n_cfg.get('vertical_offset_std', 0)}m (vibration)")
-    else:
-        print(f"  {'LIDAR':30s}: DISABLED")
+    si = env_cfg.get("stair_info", {})
+    if si.get("enabled"):
+        n_cfg = si.get("noise", {})
+        print(f"  {'Stair info':30s}: ENABLED (4 values)")
+        print(f"    [0] edge_distance     : 0..0.27m, scale={si.get('edge_dist_scale')}")
+        print(f"    [1] stair_height      : positive, scale={si.get('height_scale')}")
+        print(f"    [2] stair_depth       : positive, scale={si.get('depth_scale')}")
+        print(f"    [3] direction         : +1/-1/0,  scale={si.get('direction_scale')}")
+        print(f"    Noise:")
+        print(f"      edge_std={n_cfg.get('edge_noise_std')}m  "
+              f"height_std={n_cfg.get('height_noise_std')}m  "
+              f"depth_std={n_cfg.get('depth_noise_std')}m")
+        print(f"      dir_flip={n_cfg.get('direction_flip_prob')}  "
+              f"blackout={n_cfg.get('full_blackout_prob')}  "
+              f"latency={n_cfg.get('latency_prob')}")
 
     tc = env_cfg.get("terrain", {})
     if tc.get("enabled"):
         print(f"  {'Terrain':30s}: ENABLED")
-        print(f"    Step height range    : {tc['step_height_min']*100:.0f}cm → {tc['step_height_max']*100:.0f}cm")
+        print(f"    Height curriculum    : {tc['step_height_min']*100:.0f}cm → {tc['step_height_max']*100:.0f}cm")
+        print(f"    Depth (non-curriculum): {tc['step_depth_range'][0]*100:.0f}cm → {tc['step_depth_range'][1]*100:.0f}cm")
+        print(f"    Rows: {tc['num_difficulty_rows']}, Flights: {tc['num_flights']}, Steps: {tc['num_steps']}")
 
     pls = env_cfg.get("pls_enable", False)
     print(f"  {'PLS':30s}: {'ON' if pls else 'OFF'}")
     print(f"  {'Action space':30s}: {env_cfg['num_actions']}")
-    print(f"  {'Actor obs':30s}: {obs_cfg['num_obs']}  (proprio={obs_cfg['num_obs'] - na} + lidar={na})")
+    print(f"  {'Actor obs':30s}: {obs_cfg['num_obs']}  (49 proprio + 4 stair_info)")
     print(f"  {'Privileged critic obs':30s}: {obs_cfg['num_privileged_obs']}")
-
-    if args.resume:
-        print(f"  {'Resuming from':30s}: {args.resume}")
-        print(f"  ⚠ Actor dim changed ({obs_cfg['num_obs']}): cannot resume from non-LIDAR or 55-pt checkpoint!")
-        print(f"    Train from scratch or use a 5×3 LIDAR-compatible checkpoint.")
-
     print("=" * 70)
 
-    # --- Sim-to-Real deployment notes ---
-    print("\n  SIM-TO-REAL DEPLOYMENT PIPELINE:")
-    print("  ─────────────────────────────────")
-    print("  1. Train: python train_stair4_lidar.py")
-    print("  2. Export: actor weights from logs/go2-stairs-v4-lidar/model_XXXX.pt")
-    print("  3. On real Go2:")
-    print("     a. Read L1 LIDAR point cloud (unitree_sdk2 ChannelSubscriber)")
-    print("     b. Project to body-frame 5×3 grid:")
-    if "x_points" in a_cfg:
-        print(f"        x = {a_cfg['x_points']} m")
-        print(f"        y = {a_cfg['y_points']} m")
-    print(f"        = {na} height cells")
-    print("     c. For each cell: max_z of LIDAR points within cell")
-    print("     d. Subtract robot base z, clip to ±1.0m")
-    print("     e. Concatenate with 49 proprioceptive obs → 64-dim input")
-    print("     f. Feed to actor network → joint position targets")
-    print("  ─────────────────────────────────\n")
+    print("\n  SIM-TO-REAL DEPLOYMENT:")
+    print("  ─────────────────────")
+    print("  1. Train: python train_stair5_info.py")
+    print("  2. On real Go2:")
+    print("     a. Measure stair height and depth")
+    print("     b. Start deploy: python go2_deploy_stairs_info.py --height 0.15 --depth 0.25")
+    print("     c. LIDAR auto-detects edge_distance and direction")
+    print("     d. Policy gets 53-dim obs = 49 proprio + 4 stair_info")
+    print("  ─────────────────────\n")
 
     pickle.dump(
         [env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg],
-        open(f"{log_dir}/cfgs.pkl", "wb"),
-    )
+        open(f"{log_dir}/cfgs.pkl", "wb"))
 
     env = Go2Env(
         num_envs=args.num_envs,
