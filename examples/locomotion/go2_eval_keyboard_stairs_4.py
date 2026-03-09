@@ -37,13 +37,21 @@ RIGHT_VY = 0.7
 YAW_CW_WZ = 0.7
 YAW_CCW_WZ = 0.7
 
+# ============================================================
+# STAIR DEFAULTS
+# ============================================================
+STAIR_HEIGHT = 0.135  # riser height in meters
+STAIR_DEPTH = 0.39  # tread depth in meters
+NUM_FLIGHTS = 2  # number of up-down cycles
+NUM_STEPS_PER_FLIGHT = 10  # steps per flight
+
 # -------------------- 1. PD GAINS / STIFFNESS -----------------------
 KP = 60.0
 KD = 2.0
 
 # -------------------- 2. GROUND / ROBOT FRICTION --------------------
-GROUND_FRICTION = 0.7
-ROBOT_FRICTION = 0.7
+GROUND_FRICTION = 0.6
+ROBOT_FRICTION = 0.6
 
 # -------------------- 3. EXTERNAL PUSHES ----------------------------
 PUSH_ENABLE = False
@@ -66,15 +74,15 @@ OBS_NOISE_STD = {
 }
 
 # -------------------- 5. ACTION NOISE / MOTOR NOISE -----------------
-ACTION_NOISE_ENABLE = True
-ACTION_NOISE_STD = 0.1
+ACTION_NOISE_ENABLE = False
+ACTION_NOISE_STD = 0.01
 
 # -------------------- 6. ACTION LATENCY / DELAY --------------------
-ACTION_DELAY_ENABLE = True
+ACTION_DELAY_ENABLE = False
 ACTION_DELAY_STEPS = 1
 
 # -------------------- 7. PAYLOAD / ADDED MASS ----------------------
-PAYLOAD_ENABLE = True
+PAYLOAD_ENABLE = False
 PAYLOAD_MASS = 0.0
 
 # -------------------- 8. GRAVITY PERTURBATION ----------------------
@@ -120,9 +128,7 @@ command_state = {
     "wz": 0.0,
 }
 
-# Terrain difficulty: 0-9, changed with number keys
-terrain_state = {
-    "difficulty": 0,  # current difficulty row (0 = easiest, 9 = hardest)
+control_state = {
     "respawn_requested": False,
 }
 
@@ -150,27 +156,27 @@ def handle_key(key):
 
     with _state_lock:
         # Movement keys
-        if key == "p":
+        if key == "w":
             command_state["vx"] = FORWARD_VX
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-        elif key == "m":
+        elif key == "s":
             command_state["vx"] = -BACKWARD_VX
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-        elif key == "k":
+        elif key == "d":
             command_state["vx"] = 0.0
             command_state["vy"] = RIGHT_VY
             command_state["wz"] = 0.0
-        elif key == "j":
+        elif key == "a":
             command_state["vx"] = 0.0
             command_state["vy"] = -LEFT_VY
             command_state["wz"] = 0.0
-        elif key == "u":
+        elif key == "q":
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = -YAW_CW_WZ
-        elif key == "o":
+        elif key == "e":
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = YAW_CCW_WZ
@@ -178,35 +184,22 @@ def handle_key(key):
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-
-        # Number keys 0-9: set terrain difficulty and request respawn
-        elif key in "0123456789":
-            terrain_state["difficulty"] = int(key)
-            terrain_state["respawn_requested"] = True
-
-        # +/- to increment/decrement difficulty
-        elif key == "=":  # + key (unshifted)
-            terrain_state["difficulty"] = min(12, terrain_state["difficulty"] + 1)
-            terrain_state["respawn_requested"] = True
-        elif key == "-":
-            terrain_state["difficulty"] = max(0, terrain_state["difficulty"] - 1)
-            terrain_state["respawn_requested"] = True
+        elif key == "f":
+            control_state["respawn_requested"] = True
 
     return True
 
 
 def print_controls():
     print("\n============ KEYBOARD CONTROLS ============")
-    print(f"  P           : forward   (vx={FORWARD_VX:.2f})")
-    print(f"  M           : backward  (vx={-BACKWARD_VX:.2f})")
-    print(f"  K           : right     (vy={RIGHT_VY:.2f})")
-    print(f"  J           : left      (vy={-LEFT_VY:.2f})")
-    print(f"  U           : yaw CW    (wz={-YAW_CW_WZ:.2f})")
-    print(f"  O           : yaw CCW   (wz={YAW_CCW_WZ:.2f})")
+    print(f"  W           : forward   (vx={FORWARD_VX:.2f})")
+    print(f"  S           : backward  (vx={-BACKWARD_VX:.2f})")
+    print(f"  A           : left      (vy={-LEFT_VY:.2f})")
+    print(f"  D           : right     (vy={RIGHT_VY:.2f})")
+    print(f"  Q           : yaw CW    (wz={-YAW_CW_WZ:.2f})")
+    print(f"  E           : yaw CCW   (wz={YAW_CCW_WZ:.2f})")
     print("  SPACE       : zero velocity (stop in place)")
-    print("  ─────────── TERRAIN ─────────────────────")
-    print("  0-9         : set terrain difficulty & respawn")
-    print("  + / -       : increment / decrement (up to 12)")
+    print("  F           : respawn at start")
     print("  ─────────── QUIT ────────────────────────")
     print("  X / ESC     : quit")
     print("  CTRL+C      : quit")
@@ -319,17 +312,13 @@ def build_obs_noise_vec(obs_dim, noise_cfg, level):
     return noise_vec.unsqueeze(0)
 
 
-def respawn_at_difficulty(env, difficulty: int):
-    """Teleport env 0 to the spawn point of the given terrain difficulty row.
-
-    Works whether or not the env has terrain enabled — if terrain is off,
-    just resets to the default init pos.
-    """
+def respawn_at_start(env):
+    """Teleport env 0 back to spawn point."""
     envs_idx = torch.tensor([0], device=gs.device, dtype=torch.long)
 
-    if env._use_terrain and 0 <= difficulty < env._num_terrain_rows:
-        env._env_terrain_row[0] = difficulty
-        cx, cy, cz = env._terrain_row_centers[difficulty]
+    if env._use_terrain:
+        row = int(env._env_terrain_row[0].item())
+        cx, cy, cz = env._terrain_row_centers[row]
         spawn = torch.tensor(
             [[cx, cy, cz + env.base_init_pos[2].item()]],
             device=gs.device,
@@ -471,16 +460,28 @@ def main():
     parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v3")
     parser.add_argument("--ckpt", type=int, default=100)
     parser.add_argument(
-        "--difficulty",
-        type=int,
-        default=0,
-        help="Initial terrain difficulty row (0=easiest, 9=hardest). "
-        "Change live with number keys 0-9 or +/-.",
+        "--height",
+        type=float,
+        default=STAIR_HEIGHT,
+        help="Stair riser height in meters (0 = flat ground)",
     )
     parser.add_argument(
-        "--no-terrain",
-        action="store_true",
-        help="Force flat ground even if the training config had terrain enabled.",
+        "--depth",
+        type=float,
+        default=STAIR_DEPTH,
+        help="Stair tread depth in meters",
+    )
+    parser.add_argument(
+        "--flights",
+        type=int,
+        default=NUM_FLIGHTS,
+        help="Number of up-down flight cycles",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=NUM_STEPS_PER_FLIGHT,
+        help="Steps per flight",
     )
     args = parser.parse_args()
 
@@ -492,14 +493,30 @@ def main():
     )
 
     # ================================================================
-    # Detect if this was a terrain-trained or flat-trained model
+    # Build single-row terrain with user-specified dimensions
     # ================================================================
-    trained_with_terrain = (
-        "terrain" in env_cfg
-        and isinstance(env_cfg["terrain"], dict)
-        and env_cfg["terrain"].get("enabled", False)
-    )
-    trained_priv_obs = obs_cfg.get("num_privileged_obs", None)
+    use_stairs = args.height > 0.001
+
+    if use_stairs:
+        env_cfg["terrain"] = {
+            "enabled": True,
+            "horizontal_scale": 0.05,
+            "vertical_scale": 0.005,
+            "num_difficulty_rows": 1,  # SINGLE ROW
+            "row_width_m": 6.0,
+            "step_depth_m": args.depth,
+            "num_steps": args.steps,
+            "num_flights": args.flights,
+            "step_height_min": args.height,  # exact height
+            "step_height_max": args.height,
+            "flat_before_m": 4.0,
+            "flat_top_m": 1.5,
+            "flat_gap_m": 1.5,
+            "flat_after_m": 2.0,
+        }
+    else:
+        if "terrain" in env_cfg:
+            env_cfg["terrain"]["enabled"] = False
 
     # ================================================================
     # Override env config for evaluation
@@ -542,39 +559,6 @@ def main():
     if "curriculum" in env_cfg:
         env_cfg["curriculum"]["enabled"] = False
 
-    # Terrain: force off if --no-terrain, or ensure it stays on
-    if args.no_terrain:
-        if "terrain" in env_cfg:
-            env_cfg["terrain"]["enabled"] = False
-        print("[INFO] Terrain forced OFF (--no-terrain)")
-    elif not trained_with_terrain:
-        # Old model had no terrain config — add a default one so the env
-        # can still build with terrain for visual testing
-        print("[INFO] Model was trained WITHOUT terrain.")
-        print("       Adding terrain for visual testing. Policy may not handle stairs.")
-        env_cfg["terrain"] = {
-            "enabled": True,
-            "horizontal_scale": 0.05,
-            "vertical_scale": 0.005,
-            "num_difficulty_rows": 13,
-            "row_width_m": 6.0,
-            "step_depth_m": 0.30,
-            "num_steps": 6,
-            "num_flights": 1,
-            "step_height_min": 0.02,
-            "step_height_max": 0.15,
-            "flat_before_m": 2.0,
-            "flat_top_m": 1.5,
-            "flat_gap_m": 1.5,
-            "flat_after_m": 2.0,
-        }
-
-    # Override terrain to 13 difficulty rows (0-12) for extended testing
-    if "terrain" in env_cfg and env_cfg["terrain"].get("enabled", False):
-        env_cfg["terrain"]["num_difficulty_rows"] = 13
-        env_cfg["terrain"]["step_height_max"] = 0.20
-        print("[INFO] Terrain: 13 rows (0-12), step heights 2cm → 20cm")
-
     # Disable termination
     env_cfg["termination_if_roll_greater_than"] = 1e9
     env_cfg["termination_if_pitch_greater_than"] = 1e9
@@ -607,8 +591,9 @@ def main():
     )
 
     # Set Friction
-    if not env._use_terrain:
-        # Flat ground — find the plane entity
+    if env._use_terrain:
+        env.ground.set_friction(GROUND_FRICTION)
+    else:
         ground_entity = None
         for ent in env.scene.entities:
             try:
@@ -620,8 +605,6 @@ def main():
                 pass
         if ground_entity is not None:
             ground_entity.set_friction(GROUND_FRICTION)
-    else:
-        env.ground.set_friction(GROUND_FRICTION)
 
     env.robot.set_friction(ROBOT_FRICTION)
 
@@ -637,26 +620,6 @@ def main():
     ckpt_path = os.path.join(log_dir, f"model_{args.ckpt}.pt")
     priv_obs_mismatch = load_model_compat(runner, ckpt_path, env)
     policy = runner.get_inference_policy(device=gs.device)
-
-    # ================================================================
-    # Initial terrain spawn
-    # ================================================================
-    initial_difficulty = max(0, min(12, args.difficulty))
-    terrain_state["difficulty"] = initial_difficulty
-
-    if env._use_terrain:
-        num_rows = env._num_terrain_rows
-        clamped = min(initial_difficulty, num_rows - 1)
-        step_h = (
-            env._terrain_info["step_heights_m"][clamped] if env._use_terrain else 0.0
-        )
-        print(
-            f"\n[Terrain] Spawning at difficulty {clamped} "
-            f"(step height: {step_h * 100:.1f}cm)"
-        )
-        respawn_at_difficulty(env, clamped)
-    else:
-        print("\n[Terrain] Flat ground mode")
 
     # ================================================================
     # Push Setup
@@ -699,14 +662,6 @@ def main():
     # Reset
     # ================================================================
     obs, _ = env.reset()
-
-    # Respawn at chosen difficulty after reset
-    if env._use_terrain:
-        respawn_at_difficulty(env, initial_difficulty)
-
-    # Lock terrain rows so episode timeouts/resets keep the same difficulty.
-    # User can still change difficulty live with keyboard (0-9 / +/-),
-    # which calls respawn_at_difficulty directly.
     env._lock_terrain_rows = True
 
     zero_action = torch.zeros((1, env.num_actions), device=gs.device)
@@ -718,9 +673,15 @@ def main():
     # ================================================================
     # Config Summary
     # ================================================================
-    print("\n" + "=" * 60)
-    print("  INFERENCE CONFIG — STAIR TERRAIN + KEYBOARD CONTROL")
-    print("=" * 60)
+    print("\n" + "=" * 64)
+    print("  SIM EVALUATION — SINGLE TERRAIN + KEYBOARD CONTROL")
+    print("=" * 64)
+    if use_stairs:
+        print(f"  Stair height    : {args.height * 100:.1f}cm")
+        print(f"  Stair depth     : {args.depth * 100:.1f}cm")
+        print(f"  Flights         : {args.flights}  ({args.steps} steps each)")
+    else:
+        print("  Terrain         : FLAT (no stairs)")
     print(f"  PLS enabled     : {pls_enabled}")
     print(
         f"  Action space    : {env.num_actions} "
@@ -731,15 +692,10 @@ def main():
     print(f"  Terrain enabled : {env._use_terrain}")
     if env._use_terrain:
         print(f"  Terrain rows    : {env._num_terrain_rows}")
-        print(
-            f"  Step heights    : {[f'{h * 100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
-        )
-        print(f"  Current diff    : {terrain_state['difficulty']}")
         if hasattr(env, "_scan_n") and env._scan_n > 0:
             print(
                 f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points"
             )
-    print(f"  Trained w/terrain: {trained_with_terrain}")
     if priv_obs_mismatch != 0:
         print(f"  Priv obs compat : mismatch={priv_obs_mismatch} (handled)")
     if not pls_enabled:
@@ -759,7 +715,7 @@ def main():
     print(
         f"  Action delay    : {'ON' if ACTION_DELAY_ENABLE else 'OFF'} steps={ACTION_DELAY_STEPS}"
     )
-    print("=" * 60)
+    print("=" * 64)
 
     print_controls()
     print("Running evaluation with keyboard control...\n")
@@ -777,27 +733,16 @@ def main():
                 if _quit_event.is_set():
                     break
 
-                # --- Check for terrain respawn request ---
+                # --- Check for respawn request ---
                 with _state_lock:
-                    if terrain_state["respawn_requested"]:
-                        diff = terrain_state["difficulty"]
-                        terrain_state["respawn_requested"] = False
-                        if env._use_terrain:
-                            clamped = max(0, min(diff, env._num_terrain_rows - 1))
-                            sh = env._terrain_info["step_heights_m"][clamped]
-                            print(
-                                f"\n[Terrain] Respawning at difficulty {clamped} "
-                                f"(step height: {sh * 100:.1f}cm)"
-                            )
-                            respawn_at_difficulty(env, clamped)
-                            # Clear action buffer after respawn
-                            action_buffer.clear()
-                            for _ in range(ACTION_DELAY_STEPS + 1):
-                                action_buffer.append(zero_action.clone())
-                            # Re-get obs after respawn
-                            obs, _ = env.get_observations()
-                        else:
-                            print("\n[Terrain] No terrain — ignoring difficulty change")
+                    if control_state["respawn_requested"]:
+                        control_state["respawn_requested"] = False
+                        print("\n[Respawn] Back to start")
+                        respawn_at_start(env)
+                        action_buffer.clear()
+                        for _ in range(ACTION_DELAY_STEPS + 1):
+                            action_buffer.append(zero_action.clone())
+                        obs, _ = env.get_observations()
 
                 # --- Set command from keyboard state ---
                 target_cmd = make_command_tensor().to(gs.device)
@@ -916,15 +861,12 @@ def main():
 
                     # Show terrain info with height-above-ground
                     if env._use_terrain:
-                        diff = int(env._env_terrain_row[0].item())
                         if hasattr(env, "_get_terrain_height"):
                             terrain_z = env._get_terrain_height(
                                 pos[0:1], pos[1:2]
                             ).item()
                             hag = pos[2].item() - terrain_z
-                            parts.append(f"terr={diff} hag={hag:.3f}m")
-                        else:
-                            parts.append(f"terr={diff}")
+                            parts.append(f"hag={hag:.3f}m")
 
                     if pls_enabled:
                         stiffness_actions = actions_to_apply[0, env.num_pos_actions :]
