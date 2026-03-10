@@ -112,7 +112,7 @@ def get_cfgs():
 
         # Step height range across difficulty rows
         "step_height_min": 0.02,        # Row 0: 2cm (barely a bump)
-        "step_height_max": 0.15,        # Row 12: 15cm (real stair riser height)
+        "step_height_max": 0.20,        # Row 12: 15cm (real stair riser height)
 
         # Flat sections between stair flights
         "flat_before_m": 2.0,           # Flat runway before first flight
@@ -320,7 +320,7 @@ def get_cfgs():
     reward_cfg = {
         "tracking_sigma": 0.25,
         "base_height_target": 0.3,
-        "feet_height_target": 0.12,        # INCREASED from 0.075 for stairs
+        "feet_height_target": 0.20,      # INCREASED from 0.075 for stairs
         "feet_air_time_target": 0.1,
         "lin_vel_z_deadzone": 0.15,         # NEW: allow 0.15 m/s z-vel without penalty (stair climbing)
 
