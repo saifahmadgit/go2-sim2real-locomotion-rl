@@ -13,12 +13,12 @@ try:
         if metadata.version("rsl-rl-lib") != "2.2.4":
             raise ImportError
 except (metadata.PackageNotFoundError, ImportError) as e:
-    raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
-from rsl_rl.runners import OnPolicyRunner
-
+    raise ImportError(
+        "Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'."
+    ) from e
 import genesis as gs
-
 from go2_env import Go2Env
+from rsl_rl.runners import OnPolicyRunner
 
 
 def main():
@@ -27,10 +27,17 @@ def main():
     parser.add_argument("--ckpt", type=int, default=100)
     args = parser.parse_args()
 
-    gs.init(backend=gs.cpu)
+    gs.init()
 
     log_dir = f"logs/{args.exp_name}"
-    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"logs/{args.exp_name}/cfgs.pkl", "rb"))
+    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(
+        open(f"logs/{args.exp_name}/cfgs.pkl", "rb")
+    )
+
+    # ---- override PD gains for evaluation ----
+    env_cfg["kp"] = 20.0
+    env_cfg["kd"] = 0.5
+
     reward_cfg["reward_scales"] = {}
 
     env = Go2Env(
@@ -48,8 +55,15 @@ def main():
     policy = runner.get_inference_policy(device=gs.device)
 
     obs, _ = env.reset()
+    target_cmd = torch.tensor([[0.7, 0.0, 0.0]], device=gs.device)
+
+    step = 0
+
     with torch.no_grad():
         while True:
+            env.commands[:] = target_cmd
+            if step % 50 == 0:  # print every 50 steps
+                print("Command:", env.commands[0].cpu().numpy())
             actions = policy(obs)
             obs, rews, dones, infos = env.step(actions)
 

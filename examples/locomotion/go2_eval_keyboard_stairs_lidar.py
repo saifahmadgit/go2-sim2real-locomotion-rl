@@ -38,7 +38,7 @@ except (metadata.PackageNotFoundError, ImportError) as e:
     ) from e
 
 import genesis as gs
-from go2_env_stair4_lidar import Go2Env  # ← LIDAR-enabled env
+from go2_env_stair_lidar import Go2Env  # ← LIDAR-enabled env
 from rsl_rl.runners import OnPolicyRunner
 
 # ============================================================
@@ -56,8 +56,8 @@ KP = 60.0
 KD = 2.0
 
 # -------------------- 2. GROUND / ROBOT FRICTION --------------------
-GROUND_FRICTION = 0.7
-ROBOT_FRICTION = 0.7
+GROUND_FRICTION = 0.6
+ROBOT_FRICTION = 0.6
 
 # -------------------- 3. EXTERNAL PUSHES ----------------------------
 PUSH_ENABLE = False

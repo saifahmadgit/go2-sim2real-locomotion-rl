@@ -14,10 +14,8 @@ try:
     except metadata.PackageNotFoundError:
         if metadata.version("rsl-rl-lib") != "2.2.4":
             raise ImportError
-except (metadata.PackageNotFoundError, ImportError) as e:
-    raise ImportError(
-        "Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'."
-    ) from e
+except (metadata.PackageNotFoundError, ImportError):
+    raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.")
 
 import genesis as gs
 from go2_env import Go2Env

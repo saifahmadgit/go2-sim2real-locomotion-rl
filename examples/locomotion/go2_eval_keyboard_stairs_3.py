@@ -24,9 +24,8 @@ except (metadata.PackageNotFoundError, ImportError) as e:
     ) from e
 
 import genesis as gs
-from go2_env_stair import Go2Env
+from go2_env_stair3 import Go2Env
 from rsl_rl.runners import OnPolicyRunner
-
 
 # ============================================================
 # PREDEFINED VELOCITIES
@@ -368,6 +367,9 @@ def respawn_at_difficulty(env, difficulty: int):
     env.base_lin_vel[0] = 0.0
     env.base_ang_vel[0] = 0.0
 
+    # Reset forward progress tracker
+    env._last_base_pos_x[0] = spawn[0, 0].item()
+
 
 # =====================================================================
 # Backward-compatible model loading
@@ -377,9 +379,13 @@ def respawn_at_difficulty(env, difficulty: int):
 def load_model_compat(runner, ckpt_path, env):
     """Load a checkpoint, handling privileged obs dimension mismatch.
 
-    Older models were trained without the terrain_row privileged obs.
-    Their critic input dim is num_privileged_obs - 1. We detect this
-    and pad the critic input at runtime instead of failing to load.
+    Handles multiple generations of models:
+    - Walking models (no terrain_row, no height_scan)
+    - Stair v1 models (terrain_row but no height_scan)
+    - Stair v2 models (terrain_row + height_scan)
+
+    The critic input dim will differ between these. We detect this
+    and load actor weights while letting the critic re-initialise.
     """
     ckpt = torch.load(ckpt_path, map_location=gs.device, weights_only=False)
 
@@ -404,10 +410,14 @@ def load_model_compat(runner, ckpt_path, env):
             print("\n[COMPAT] Critic input dim mismatch detected:")
             print(f"  Saved model expects : {saved_critic_in}")
             print(f"  Current env provides: {expected_critic_in}")
-            print(
-                f"  Difference          : {mismatch} (will {'pad' if mismatch > 0 else 'truncate'} at runtime)"
-            )
-            print("  This is expected when loading a pre-terrain model.\n")
+            print(f"  Difference          : {mismatch}")
+            if abs(mismatch) == 1:
+                print("  (likely: old model without terrain_row)")
+            elif abs(mismatch) == 77:
+                print("  (likely: old model without height_scan)")
+            elif abs(mismatch) == 78:
+                print("  (likely: walking model without terrain_row or height_scan)")
+            print("  Actor will load, critic will re-initialise.\n")
 
     # Load via runner (handles actor, which has no dim change)
     try:
@@ -457,7 +467,7 @@ def _partial_load(runner, model_state):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v1")
+    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v3")
     parser.add_argument("--ckpt", type=int, default=100)
     parser.add_argument(
         "--difficulty",
@@ -557,13 +567,6 @@ def main():
             "flat_gap_m": 1.5,
             "flat_after_m": 2.0,
         }
-
-    # If old model didn't have terrain_row in privileged obs, the buffer
-    # will be sized to the old num_privileged_obs (e.g. 104). The env's
-    # _build_privileged_obs has a bounds guard that skips writing
-    # terrain_row when the buffer is too small. This means old models
-    # work as-is: the critic never sees terrain_row (which it doesn't
-    # expect), and the actor obs are unchanged.
 
     # Disable termination
     env_cfg["termination_if_roll_greater_than"] = 1e9
@@ -717,6 +720,7 @@ def main():
         f"({'12 pos + 4 stiffness' if pls_enabled else '12 pos'})"
     )
     print(f"  Actor obs dim   : {obs_cfg['num_obs']}")
+    print(f"  Critic obs dim  : {obs_cfg.get('num_privileged_obs', 'N/A')}")
     print(f"  Terrain enabled : {env._use_terrain}")
     if env._use_terrain:
         print(f"  Terrain rows    : {env._num_terrain_rows}")
@@ -724,6 +728,10 @@ def main():
             f"  Step heights    : {[f'{h * 100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
         )
         print(f"  Current diff    : {terrain_state['difficulty']}")
+        if hasattr(env, "_scan_n") and env._scan_n > 0:
+            print(
+                f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points"
+            )
     print(f"  Trained w/terrain: {trained_with_terrain}")
     if priv_obs_mismatch != 0:
         print(f"  Priv obs compat : mismatch={priv_obs_mismatch} (handled)")
@@ -899,10 +907,12 @@ def main():
                         f"vel=[{vel[0].item():.2f},{vel[1].item():.2f},{vel[2].item():.2f}]"
                     )
 
-                    # Show terrain info
+                    # Show terrain info with height-above-ground
                     if env._use_terrain:
                         diff = int(env._env_terrain_row[0].item())
-                        parts.append(f"terr={diff}")
+                        terrain_z = env._get_terrain_height(pos[0:1], pos[1:2]).item()
+                        hag = pos[2].item() - terrain_z
+                        parts.append(f"terr={diff} hag={hag:.3f}m")
 
                     if pls_enabled:
                         stiffness_actions = actions_to_apply[0, env.num_pos_actions :]

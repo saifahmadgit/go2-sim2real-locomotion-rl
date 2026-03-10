@@ -30,8 +30,8 @@ from rsl_rl.runners import OnPolicyRunner
 # ============================================================
 # PREDEFINED VELOCITIES
 # ============================================================
-FORWARD_VX = 0.5
-BACKWARD_VX = 0.5
+FORWARD_VX = 0.4
+BACKWARD_VX = 0.4
 LEFT_VY = 0.7
 RIGHT_VY = 0.7
 YAW_CW_WZ = 0.7
@@ -74,11 +74,11 @@ OBS_NOISE_STD = {
 }
 
 # -------------------- 5. ACTION NOISE / MOTOR NOISE -----------------
-ACTION_NOISE_ENABLE = False
+ACTION_NOISE_ENABLE = True
 ACTION_NOISE_STD = 0.01
 
 # -------------------- 6. ACTION LATENCY / DELAY --------------------
-ACTION_DELAY_ENABLE = False
+ACTION_DELAY_ENABLE = True
 ACTION_DELAY_STEPS = 1
 
 # -------------------- 7. PAYLOAD / ADDED MASS ----------------------
@@ -86,7 +86,7 @@ PAYLOAD_ENABLE = False
 PAYLOAD_MASS = 0.0
 
 # -------------------- 8. GRAVITY PERTURBATION ----------------------
-GRAVITY_PERTURB_ENABLE = False
+GRAVITY_PERTURB_ENABLE = True
 GRAVITY_PERTURB_X = 0.0
 GRAVITY_PERTURB_Y = 0.0
 GO2_APPROX_MASS = 15.0

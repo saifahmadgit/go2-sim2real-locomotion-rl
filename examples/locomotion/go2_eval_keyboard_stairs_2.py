@@ -24,7 +24,7 @@ except (metadata.PackageNotFoundError, ImportError) as e:
     ) from e
 
 import genesis as gs
-from go2_env_stair import Go2Env
+from go2_env_stair2 import Go2Env
 from rsl_rl.runners import OnPolicyRunner
 
 # ============================================================

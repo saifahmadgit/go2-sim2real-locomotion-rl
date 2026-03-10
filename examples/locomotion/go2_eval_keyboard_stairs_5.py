@@ -24,7 +24,7 @@ except (metadata.PackageNotFoundError, ImportError) as e:
     ) from e
 
 import genesis as gs
-from go2_env_stair5 import Go2Env, DEFAULT_TERRAIN_CFG
+from go2_env_stair4 import Go2Env
 from rsl_rl.runners import OnPolicyRunner
 
 # ============================================================
@@ -120,8 +120,9 @@ command_state = {
     "wz": 0.0,
 }
 
+# Terrain difficulty: 0-9, changed with number keys
 terrain_state = {
-    "difficulty": 0,
+    "difficulty": 0,  # current difficulty row (0 = easiest, 9 = hardest)
     "respawn_requested": False,
 }
 
@@ -137,6 +138,7 @@ def make_command_tensor():
 
 
 def handle_key(key):
+    """Process a keypress and update command_state. Returns False to quit."""
     if key is None:
         return True
 
@@ -147,6 +149,7 @@ def handle_key(key):
         return False
 
     with _state_lock:
+        # Movement keys
         if key == "p":
             command_state["vx"] = FORWARD_VX
             command_state["vy"] = 0.0
@@ -176,11 +179,13 @@ def handle_key(key):
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
 
+        # Number keys 0-9: set terrain difficulty and request respawn
         elif key in "0123456789":
             terrain_state["difficulty"] = int(key)
             terrain_state["respawn_requested"] = True
 
-        elif key == "=":
+        # +/- to increment/decrement difficulty
+        elif key == "=":  # + key (unshifted)
             terrain_state["difficulty"] = min(12, terrain_state["difficulty"] + 1)
             terrain_state["respawn_requested"] = True
         elif key == "-":
@@ -315,7 +320,11 @@ def build_obs_noise_vec(obs_dim, noise_cfg, level):
 
 
 def respawn_at_difficulty(env, difficulty: int):
-    """Teleport env 0 to the spawn point of the given terrain difficulty row."""
+    """Teleport env 0 to the spawn point of the given terrain difficulty row.
+
+    Works whether or not the env has terrain enabled — if terrain is off,
+    just resets to the default init pos.
+    """
     envs_idx = torch.tensor([0], device=gs.device, dtype=torch.long)
 
     if env._use_terrain and 0 <= difficulty < env._num_terrain_rows:
@@ -329,6 +338,7 @@ def respawn_at_difficulty(env, difficulty: int):
     else:
         spawn = env.base_init_pos.unsqueeze(0).clone()
 
+    # Reset dofs
     env.dof_pos[0] = env.default_dof_pos
     env.dof_vel[0] = 0.0
     env.robot.set_dofs_position(
@@ -338,6 +348,7 @@ def respawn_at_difficulty(env, difficulty: int):
         envs_idx=envs_idx,
     )
 
+    # Reset base pose
     env.base_pos[0] = spawn[0]
     env.base_quat[0] = env.base_init_quat
     env.robot.set_pos(spawn, zero_velocity=False, envs_idx=envs_idx)
@@ -348,6 +359,7 @@ def respawn_at_difficulty(env, difficulty: int):
     )
     env.robot.zero_all_dofs_velocity(envs_idx)
 
+    # Clear action buffers
     env.last_actions[0] = 0.0
     env.last_dof_vel[0] = 0.0
     env._applied_actions[0] = 0.0
@@ -355,6 +367,7 @@ def respawn_at_difficulty(env, difficulty: int):
     env.base_lin_vel[0] = 0.0
     env.base_ang_vel[0] = 0.0
 
+    # Reset forward progress tracker (may not exist if rewards are disabled)
     if hasattr(env, "_last_base_pos_x"):
         env._last_base_pos_x[0] = spawn[0, 0].item()
 
@@ -369,8 +382,8 @@ def load_model_compat(runner, ckpt_path, env):
 
     Handles multiple generations of models:
     - Walking models (no terrain_row, no height_scan)
-    - Stair v1-v4 models (various privileged obs dims)
-    - Stair v5 models (full privileged obs)
+    - Stair v1 models (terrain_row but no height_scan)
+    - Stair v2 models (terrain_row + height_scan)
 
     The critic input dim will differ between these. We detect this
     and load actor weights while letting the critic re-initialise.
@@ -379,6 +392,7 @@ def load_model_compat(runner, ckpt_path, env):
 
     model_state = ckpt.get("model_state_dict", ckpt)
 
+    # Detect critic input dim from first critic layer weights
     critic_key = None
     for k in model_state:
         if "critic" in k.lower() and "weight" in k.lower():
@@ -406,6 +420,7 @@ def load_model_compat(runner, ckpt_path, env):
                 print("  (likely: walking model without terrain_row or height_scan)")
             print("  Actor will load, critic will re-initialise.\n")
 
+    # Load via runner (handles actor, which has no dim change)
     try:
         runner.load(ckpt_path)
     except RuntimeError as e:
@@ -453,13 +468,13 @@ def _partial_load(runner, model_state):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v5-up")
+    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v3")
     parser.add_argument("--ckpt", type=int, default=100)
     parser.add_argument(
         "--difficulty",
         type=int,
         default=0,
-        help="Initial terrain difficulty row (0=easiest). "
+        help="Initial terrain difficulty row (0=easiest, 9=hardest). "
         "Change live with number keys 0-9 or +/-.",
     )
     parser.add_argument(
@@ -477,16 +492,12 @@ def main():
     )
 
     # ================================================================
-    # Detect training config properties
+    # Detect if this was a terrain-trained or flat-trained model
     # ================================================================
     trained_with_terrain = (
         "terrain" in env_cfg
         and isinstance(env_cfg["terrain"], dict)
         and env_cfg["terrain"].get("enabled", False)
-    )
-    trained_up_only = (
-        trained_with_terrain
-        and env_cfg["terrain"].get("up_only", False)
     )
     trained_priv_obs = obs_cfg.get("num_privileged_obs", None)
 
@@ -531,50 +542,40 @@ def main():
     if "curriculum" in env_cfg:
         env_cfg["curriculum"]["enabled"] = False
 
-    # Terrain
+    # Terrain: force off if --no-terrain, or ensure it stays on
     if args.no_terrain:
         if "terrain" in env_cfg:
             env_cfg["terrain"]["enabled"] = False
         print("[INFO] Terrain forced OFF (--no-terrain)")
     elif not trained_with_terrain:
+        # Old model had no terrain config — add a default one so the env
+        # can still build with terrain for visual testing
         print("[INFO] Model was trained WITHOUT terrain.")
         print("       Adding terrain for visual testing. Policy may not handle stairs.")
         env_cfg["terrain"] = {
             "enabled": True,
-            "up_only": True,
             "horizontal_scale": 0.05,
             "vertical_scale": 0.005,
-            "num_difficulty_rows": 11,
+            "num_difficulty_rows": 13,
             "row_width_m": 6.0,
-            "step_depth_m": 0.28,
+            "step_depth_m": 0.30,
             "num_steps": 6,
-            "num_flights": 3,
-            "step_height_min": 0.10,
-            "step_height_max": 0.20,
+            "num_flights": 1,
+            "step_height_min": 0.02,
+            "step_height_max": 0.15,
             "flat_before_m": 2.0,
-            "flat_top_m": 2.0,
+            "flat_top_m": 1.5,
+            "flat_gap_m": 1.5,
             "flat_after_m": 2.0,
         }
 
-    # Force terrain config from env file (single source of truth)
-    # Ignores whatever was saved in cfgs.pkl
-    old_terrain = env_cfg.get("terrain", {})
-    env_cfg["terrain"] = dict(DEFAULT_TERRAIN_CFG)
-    # Preserve height_scan from pickle if it was there (env needs it)
-    if "height_scan" in old_terrain:
-        env_cfg["terrain"]["height_scan"] = old_terrain["height_scan"]
-
-    # Allow overriding terrain rows for extended testing
+    # Override terrain to 13 difficulty rows (0-12) for extended testing
     if "terrain" in env_cfg and env_cfg["terrain"].get("enabled", False):
-        tc = env_cfg["terrain"]
-        num_rows = tc.get("num_difficulty_rows", 11)
-        up_only = tc.get("up_only", False)
-        step_min = tc.get("step_height_min", 0.10)
-        step_max = tc.get("step_height_max", 0.20)
-        print(f"[INFO] Terrain: {num_rows} rows ({'UP-ONLY' if up_only else 'UP-DOWN'}), "
-              f"step heights {step_min*100:.0f}cm → {step_max*100:.0f}cm")
+        env_cfg["terrain"]["num_difficulty_rows"] = 13
+        env_cfg["terrain"]["step_height_max"] = 0.20
+        print("[INFO] Terrain: 13 rows (0-12), step heights 2cm → 20cm")
 
-    # Disable termination for eval
+    # Disable termination
     env_cfg["termination_if_roll_greater_than"] = 1e9
     env_cfg["termination_if_pitch_greater_than"] = 1e9
     env_cfg["termination_if_z_vel_greater_than"] = 1e9
@@ -607,6 +608,7 @@ def main():
 
     # Set Friction
     if not env._use_terrain:
+        # Flat ground — find the plane entity
         ground_entity = None
         for ent in env.scene.entities:
             try:
@@ -645,16 +647,12 @@ def main():
     if env._use_terrain:
         num_rows = env._num_terrain_rows
         clamped = min(initial_difficulty, num_rows - 1)
-        step_h = env._terrain_info["step_heights_m"][clamped]
-        up_only = env._terrain_info.get("up_only", False)
-        num_flights = env._terrain_info.get("num_flights", 1)
-        num_steps = env._terrain_info.get("num_steps", 6)
-        total_elev = num_flights * num_steps * step_h
+        step_h = (
+            env._terrain_info["step_heights_m"][clamped] if env._use_terrain else 0.0
+        )
         print(
             f"\n[Terrain] Spawning at difficulty {clamped} "
-            f"(step: {step_h*100:.1f}cm, "
-            f"{'UP-ONLY' if up_only else 'UP-DOWN'}, "
-            f"total elevation: {total_elev:.2f}m)"
+            f"(step height: {step_h * 100:.1f}cm)"
         )
         respawn_at_difficulty(env, clamped)
     else:
@@ -675,6 +673,7 @@ def main():
     push_remaining = 0
     cached_push = torch.zeros((1, 3), device=gs.device, dtype=gs.tc_float)
 
+    # Precompute constant forces
     constant_force = torch.zeros((1, 3), device=gs.device, dtype=gs.tc_float)
     has_constant_force = False
 
@@ -701,9 +700,13 @@ def main():
     # ================================================================
     obs, _ = env.reset()
 
+    # Respawn at chosen difficulty after reset
     if env._use_terrain:
         respawn_at_difficulty(env, initial_difficulty)
 
+    # Lock terrain rows so episode timeouts/resets keep the same difficulty.
+    # User can still change difficulty live with keyboard (0-9 / +/-),
+    # which calls respawn_at_difficulty directly.
     env._lock_terrain_rows = True
 
     zero_action = torch.zeros((1, env.num_actions), device=gs.device)
@@ -716,7 +719,7 @@ def main():
     # Config Summary
     # ================================================================
     print("\n" + "=" * 60)
-    print("  EVAL — STAIR-UP v5 + KEYBOARD CONTROL")
+    print("  INFERENCE CONFIG — STAIR TERRAIN + KEYBOARD CONTROL")
     print("=" * 60)
     print(f"  PLS enabled     : {pls_enabled}")
     print(
@@ -727,10 +730,9 @@ def main():
     print(f"  Critic obs dim  : {obs_cfg.get('num_privileged_obs', 'N/A')}")
     print(f"  Terrain enabled : {env._use_terrain}")
     if env._use_terrain:
-        print(f"  Terrain mode    : {'UP-ONLY' if env._terrain_info.get('up_only') else 'UP-DOWN'}")
         print(f"  Terrain rows    : {env._num_terrain_rows}")
         print(
-            f"  Step heights    : {[f'{h*100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
+            f"  Step heights    : {[f'{h * 100:.1f}cm' for h in env._terrain_info['step_heights_m']]}"
         )
         print(f"  Current diff    : {terrain_state['difficulty']}")
         if hasattr(env, "_scan_n") and env._scan_n > 0:
@@ -738,8 +740,6 @@ def main():
                 f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points"
             )
     print(f"  Trained w/terrain: {trained_with_terrain}")
-    if trained_with_terrain:
-        print(f"  Trained up-only : {trained_up_only}")
     if priv_obs_mismatch != 0:
         print(f"  Priv obs compat : mismatch={priv_obs_mismatch} (handled)")
     if not pls_enabled:
@@ -785,17 +785,16 @@ def main():
                         if env._use_terrain:
                             clamped = max(0, min(diff, env._num_terrain_rows - 1))
                             sh = env._terrain_info["step_heights_m"][clamped]
-                            num_fl = env._terrain_info.get("num_flights", 1)
-                            num_st = env._terrain_info.get("num_steps", 6)
-                            total_elev = num_fl * num_st * sh
                             print(
                                 f"\n[Terrain] Respawning at difficulty {clamped} "
-                                f"(step: {sh*100:.1f}cm, elevation: {total_elev:.2f}m)"
+                                f"(step height: {sh * 100:.1f}cm)"
                             )
                             respawn_at_difficulty(env, clamped)
+                            # Clear action buffer after respawn
                             action_buffer.clear()
                             for _ in range(ACTION_DELAY_STEPS + 1):
                                 action_buffer.append(zero_action.clone())
+                            # Re-get obs after respawn
                             obs, _ = env.get_observations()
                         else:
                             print("\n[Terrain] No terrain — ignoring difficulty change")
@@ -915,7 +914,7 @@ def main():
                         f"vel=[{vel[0].item():.2f},{vel[1].item():.2f},{vel[2].item():.2f}]"
                     )
 
-                    # Show terrain info with height-above-ground and pitch
+                    # Show terrain info with height-above-ground
                     if env._use_terrain:
                         diff = int(env._env_terrain_row[0].item())
                         if hasattr(env, "_get_terrain_height"):
@@ -927,14 +926,8 @@ def main():
                         else:
                             parts.append(f"terr={diff}")
 
-                    # Show pitch (important for stair climbing)
-                    if hasattr(env, "base_euler"):
-                        pitch = env.base_euler[0, 1].item()
-                        roll = env.base_euler[0, 0].item()
-                        parts.append(f"pitch={pitch:.1f}° roll={roll:.1f}°")
-
                     if pls_enabled:
-                        stiffness_actions = actions_to_apply[0, env.num_pos_actions:]
+                        stiffness_actions = actions_to_apply[0, env.num_pos_actions :]
                         kp_per_leg = (
                             env.pls_kp_default
                             + stiffness_actions * env.pls_kp_action_scale
