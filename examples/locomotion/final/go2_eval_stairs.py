@@ -21,7 +21,7 @@ try:
 except (metadata.PackageNotFoundError, ImportError) as e:
     raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
 
-from go2_env_stair4 import Go2Env
+from go2_env_stair import Go2Env
 from rsl_rl.runners import OnPolicyRunner
 
 import genesis as gs

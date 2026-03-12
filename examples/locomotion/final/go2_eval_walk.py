@@ -7,6 +7,7 @@ from collections import deque
 from importlib import metadata
 from typing import Optional
 
+import numpy as np
 import torch
 from pynput import keyboard
 
@@ -21,36 +22,32 @@ try:
 except (metadata.PackageNotFoundError, ImportError) as e:
     raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
 
-from go2_env_stair4 import Go2Env
+from go2_env_walk import Go2Env
 from rsl_rl.runners import OnPolicyRunner
 
 import genesis as gs
 
-# ============================================================
-# PREDEFINED VELOCITIES
-# ============================================================
-FORWARD_VX = 0.4
-BACKWARD_VX = 0.4
-LEFT_VY = 0.7
-RIGHT_VY = 0.7
-YAW_CW_WZ = 0.7
-YAW_CCW_WZ = 0.7
+# =====================================================================
+#  INFERENCE CONFIG — all eval-time knobs at the top
+# =====================================================================
 
 # ============================================================
-# STAIR DEFAULTS
+# PREDEFINED VELOCITIES (edit these to change speed)
 # ============================================================
-STAIR_HEIGHT = 0.135  # riser height in meters
-STAIR_DEPTH = 0.39  # tread depth in meters
-NUM_FLIGHTS = 2  # number of up-down cycles
-NUM_STEPS_PER_FLIGHT = 10  # steps per flight
+FORWARD_VX = 0.6  # P key: forward speed
+BACKWARD_VX = 0.5  # M key: backward speed
+LEFT_VY = 0.7  # J key: negative vy (left)
+RIGHT_VY = 0.7  # K key: positive vy (right)
+YAW_CW_WZ = 0.7  # U key: clockwise yaw
+YAW_CCW_WZ = 0.7  # O key: counter-clockwise yaw
 
 # -------------------- 1. PD GAINS / STIFFNESS -----------------------
 KP = 60.0
 KD = 2.0
 
 # -------------------- 2. GROUND / ROBOT FRICTION --------------------
-GROUND_FRICTION = 0.6
-ROBOT_FRICTION = 0.6
+GROUND_FRICTION = 0.7
+ROBOT_FRICTION = 0.7
 
 # -------------------- 3. EXTERNAL PUSHES ----------------------------
 PUSH_ENABLE = False
@@ -81,11 +78,11 @@ ACTION_DELAY_ENABLE = True
 ACTION_DELAY_STEPS = 1
 
 # -------------------- 7. PAYLOAD / ADDED MASS ----------------------
-PAYLOAD_ENABLE = False
+PAYLOAD_ENABLE = True
 PAYLOAD_MASS = 0.0
 
 # -------------------- 8. GRAVITY PERTURBATION ----------------------
-GRAVITY_PERTURB_ENABLE = True
+GRAVITY_PERTURB_ENABLE = False
 GRAVITY_PERTURB_X = 0.0
 GRAVITY_PERTURB_Y = 0.0
 GO2_APPROX_MASS = 15.0
@@ -114,6 +111,39 @@ DYNAMIC_PAYLOAD_ENABLE = False
 DYNAMIC_PAYLOAD_STEP = 50
 DYNAMIC_PAYLOAD_MASS = 3.0
 
+# -------------------- 13. TERRAIN ----------------------------------
+# When TERRAIN_ENABLE = True, a custom numpy heightmap is generated
+# with EXACT control over bump heights. Change MIN_HEIGHT / MAX_HEIGHT
+# to control difficulty. Heights are in METERS — what you set is what
+# you get. A new random terrain is generated every run.
+#
+# Set TERRAIN_ENABLE = False for a flat plane (same as old behaviour).
+
+TERRAIN_ENABLE = False
+
+TERRAIN_SIZE_X = 15.0  # terrain width in meters
+TERRAIN_SIZE_Y = 15.0  # terrain depth in meters
+TERRAIN_HORIZONTAL_SCALE = 0.05  # meters per heightmap pixel (smaller = finer detail)
+
+# =====================================================================
+# BUMP HEIGHT — this is the ONLY knob you need to change difficulty
+# Heights are in METERS, directly. No vertical_scale confusion.
+# =====================================================================
+MIN_HEIGHT = -0.00  # meters (negative = dips)
+MAX_HEIGHT = 0.00  # meters (positive = bumps)
+# Examples:
+#   ±0.00  = perfectly flat
+#   ±0.02  = gentle (carpet, smooth pavement)
+#   ±0.04  = training match (mats, grass, uneven pavement)
+#   ±0.08  = hard (rough outdoor)
+#   ±0.15  = very hard (rocky, likely beyond policy)
+
+TERRAIN_SMOOTHING = 5  # uniform_filter size (1 = no smoothing, 3-5 = natural bumps)
+
+# Starting tile (0-indexed). Press 1-6 to change row, [ ] to change col.
+TERRAIN_SELECTED_ROW = 0
+TERRAIN_SELECTED_COL = 0
+
 # -------------------- DEBUG ----------------------------------------
 DEBUG_PRINT_INTERVAL = 200
 
@@ -122,12 +152,14 @@ DEBUG_PRINT_INTERVAL = 200
 # =====================================================================
 
 command_state = {
-    "vx": FORWARD_VX,
+    "vx": 0.0,
     "vy": 0.0,
     "wz": 0.0,
 }
 
-control_state = {
+terrain_state = {
+    "row": TERRAIN_SELECTED_ROW,
+    "col": TERRAIN_SELECTED_COL,
     "respawn_requested": False,
 }
 
@@ -154,28 +186,28 @@ def handle_key(key):
         return False
 
     with _state_lock:
-        # Movement keys
-        if key == "w":
+        # ---- Movement ----
+        if key == "p":
             command_state["vx"] = FORWARD_VX
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-        elif key == "s":
+        elif key == "m":
             command_state["vx"] = -BACKWARD_VX
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-        elif key == "d":
+        elif key == "k":
             command_state["vx"] = 0.0
             command_state["vy"] = RIGHT_VY
             command_state["wz"] = 0.0
-        elif key == "a":
+        elif key == "j":
             command_state["vx"] = 0.0
             command_state["vy"] = -LEFT_VY
             command_state["wz"] = 0.0
-        elif key == "q":
+        elif key == "u":
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = -YAW_CW_WZ
-        elif key == "e":
+        elif key == "o":
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = YAW_CCW_WZ
@@ -183,30 +215,78 @@ def handle_key(key):
             command_state["vx"] = 0.0
             command_state["vy"] = 0.0
             command_state["wz"] = 0.0
-        elif key == "f":
-            control_state["respawn_requested"] = True
+
+        # ---- Terrain row selection: 1-9 ----
+        elif key in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            row_idx = int(key) - 1
+            if row_idx < len(_TERRAIN_PRESETS):
+                preset = _TERRAIN_PRESETS[row_idx]
+                terrain_state["row"] = row_idx
+                terrain_state["respawn_requested"] = True
+                print(f"\n  >> Selected preset {row_idx + 1}: {preset['label']}")
+
+        # ---- R: respawn on current tile ----
+        elif key == "r":
+            terrain_state["respawn_requested"] = True
 
     return True
 
 
+# =====================================================================
+# TERRAIN PRESETS — press 1-5 to switch difficulty during eval
+# =====================================================================
+_TERRAIN_PRESETS = [
+    {"label": "Flat", "min_h": 0.0, "max_h": 0.0},
+    {"label": "Gentle (±2cm)", "min_h": -0.02, "max_h": 0.02},
+    {"label": "Medium (±4cm)", "min_h": -0.04, "max_h": 0.04},
+    {"label": "Hard (±8cm)", "min_h": -0.08, "max_h": 0.08},
+    {"label": "Extreme (±15cm)", "min_h": -0.15, "max_h": 0.15},
+]
+
+
+def generate_heightmap(min_h, max_h, size_x, size_y, h_scale, smoothing=3):
+    """Generate a numpy heightmap with exact height range in meters."""
+    res_x = int(size_x / h_scale)
+    res_y = int(size_y / h_scale)
+
+    if min_h == 0.0 and max_h == 0.0:
+        # Perfectly flat
+        hf = np.zeros((res_y, res_x), dtype=np.float32)
+    else:
+        hf = np.random.uniform(min_h, max_h, (res_y, res_x)).astype(np.float32)
+        if smoothing > 1:
+            try:
+                from scipy.ndimage import uniform_filter
+
+                hf = uniform_filter(hf, size=smoothing).astype(np.float32)
+            except ImportError:
+                pass  # no scipy, use raw noise
+
+    return hf
+
+
 def print_controls():
     print("\n============ KEYBOARD CONTROLS ============")
-    print(f"  W           : forward   (vx={FORWARD_VX:.2f})")
-    print(f"  S           : backward  (vx={-BACKWARD_VX:.2f})")
-    print(f"  A           : left      (vy={-LEFT_VY:.2f})")
-    print(f"  D           : right     (vy={RIGHT_VY:.2f})")
-    print(f"  Q           : yaw CW    (wz={-YAW_CW_WZ:.2f})")
-    print(f"  E           : yaw CCW   (wz={YAW_CCW_WZ:.2f})")
-    print("  SPACE       : zero velocity (stop in place)")
-    print("  F           : respawn at start")
-    print("  ─────────── QUIT ────────────────────────")
+    print(f"  P           : forward   (vx={FORWARD_VX:.2f})")
+    print(f"  M           : backward  (vx={-BACKWARD_VX:.2f})")
+    print(f"  K           : right     (vy={RIGHT_VY:.2f})")
+    print(f"  J           : left      (vy={-LEFT_VY:.2f})")
+    print(f"  U           : yaw CW    (wz={-YAW_CW_WZ:.2f})")
+    print(f"  O           : yaw CCW   (wz={YAW_CCW_WZ:.2f})")
+    print("  SPACE       : zero velocity (stop)")
+    if TERRAIN_ENABLE:
+        print("  ─────────── TERRAIN PRESETS ───────────")
+        for i, p in enumerate(_TERRAIN_PRESETS):
+            print(f"  {i + 1}           : {p['label']}")
+        print("  R           : respawn (new random terrain at same difficulty)")
+    print("  ─────────── OTHER ─────────────")
     print("  X / ESC     : quit")
     print("  CTRL+C      : quit")
     print("============================================\n")
 
 
 # =====================================================================
-# GLOBAL KEYBOARD LISTENER
+# GLOBAL KEYBOARD LISTENER (works even when viewer is focused)
 # =====================================================================
 
 _quit_event = threading.Event()
@@ -311,138 +391,96 @@ def build_obs_noise_vec(obs_dim, noise_cfg, level):
     return noise_vec.unsqueeze(0)
 
 
-def respawn_at_start(env):
-    """Teleport env 0 back to spawn point."""
-    envs_idx = torch.tensor([0], device=gs.device, dtype=torch.long)
+# =====================================================================
+# Terrain helpers
+# =====================================================================
 
-    if env._use_terrain:
-        row = int(env._env_terrain_row[0].item())
-        cx, cy, cz = env._terrain_row_centers[row]
-        spawn = torch.tensor(
-            [[cx, cy, cz + env.base_init_pos[2].item()]],
+
+def respawn_on_tile(env, row, col):
+    """Teleport the single eval robot to the center of the terrain or flat ground."""
+    terrain = env.terrain
+
+    if terrain is None or not terrain.enabled:
+        # Flat ground — just reset to default pos
+        env.robot.set_dofs_position(
+            position=env.default_dof_pos.unsqueeze(0),
+            dofs_idx_local=env.motors_dof_idx,
+            zero_velocity=True,
+            envs_idx=[0],
+        )
+        env.robot.set_pos(env.base_init_pos.unsqueeze(0), zero_velocity=True, envs_idx=[0])
+        env.robot.set_quat(env.base_init_quat.unsqueeze(0), zero_velocity=True, envs_idx=[0])
+        env.robot.zero_all_dofs_velocity([0])
+        print("\n  >> Respawned on flat ground")
+        return
+
+    # ---- Tile-based terrain (subterrain grid) ----
+    if hasattr(terrain, "_tile_centers") and terrain._tile_centers is not None:
+        r = min(row, terrain.n_rows - 1)
+        c = min(col, terrain.n_cols - 1)
+
+        center = terrain._tile_centers[r, c].clone()
+        ground_z = terrain._query_height_batch(center[0:1], center[1:2])
+        base_z = float(env.base_init_pos[2])
+        spawn_z = ground_z[0].item() + base_z + terrain.spawn_height_offset
+
+        spawn_pos = torch.tensor(
+            [[center[0].item(), center[1].item(), spawn_z]],
             device=gs.device,
             dtype=gs.tc_float,
         )
-    else:
-        spawn = env.base_init_pos.unsqueeze(0).clone()
 
-    # Reset dofs
-    env.dof_pos[0] = env.default_dof_pos
-    env.dof_vel[0] = 0.0
+        terrain._env_tile_row[0] = r
+        terrain._env_tile_col[0] = c
+        terrain._env_spawn_pos[0] = spawn_pos[0]
+
+        terrain_type = terrain.subterrain_types[r][c]
+        label = f"Row {r}, Col {c}: {terrain_type}"
+
+    # ---- Custom heightmap (no tile grid) ----
+    else:
+        base_z = float(env.base_init_pos[2])
+        spawn_offset = getattr(terrain, "spawn_height_offset", 0.05)
+
+        # Query ground height at center of heightmap
+        if hasattr(terrain, "_query_height_batch"):
+            cx = torch.tensor([0.0], device=gs.device)
+            cy = torch.tensor([0.0], device=gs.device)
+            ground_z = terrain._query_height_batch(cx, cy)
+            spawn_z = ground_z[0].item() + base_z + spawn_offset
+        else:
+            spawn_z = base_z + spawn_offset
+
+        spawn_pos = torch.tensor(
+            [[0.0, 0.0, spawn_z]],
+            device=gs.device,
+            dtype=gs.tc_float,
+        )
+
+        if hasattr(terrain, "_env_spawn_pos"):
+            terrain._env_spawn_pos[0] = spawn_pos[0]
+
+        label = "custom heightmap"
+
+    # Reset robot
     env.robot.set_dofs_position(
-        position=env.dof_pos[envs_idx],
+        position=env.default_dof_pos.unsqueeze(0),
         dofs_idx_local=env.motors_dof_idx,
         zero_velocity=True,
-        envs_idx=envs_idx,
+        envs_idx=[0],
     )
+    env.robot.set_pos(spawn_pos, zero_velocity=True, envs_idx=[0])
+    env.robot.set_quat(env.base_init_quat.unsqueeze(0), zero_velocity=True, envs_idx=[0])
+    env.robot.zero_all_dofs_velocity([0])
 
-    # Reset base pose
-    env.base_pos[0] = spawn[0]
-    env.base_quat[0] = env.base_init_quat
-    env.robot.set_pos(spawn, zero_velocity=False, envs_idx=envs_idx)
-    env.robot.set_quat(
-        env.base_init_quat.unsqueeze(0),
-        zero_velocity=False,
-        envs_idx=envs_idx,
-    )
-    env.robot.zero_all_dofs_velocity(envs_idx)
-
-    # Clear action buffers
+    # Reset env buffers
     env.last_actions[0] = 0.0
     env.last_dof_vel[0] = 0.0
     env._applied_actions[0] = 0.0
     env._action_history[0] = 0.0
-    env.base_lin_vel[0] = 0.0
-    env.base_ang_vel[0] = 0.0
+    env.episode_length_buf[0] = 0
 
-    # Reset forward progress tracker (may not exist if rewards are disabled)
-    if hasattr(env, "_last_base_pos_x"):
-        env._last_base_pos_x[0] = spawn[0, 0].item()
-
-
-# =====================================================================
-# Backward-compatible model loading
-# =====================================================================
-
-
-def load_model_compat(runner, ckpt_path, env):
-    """Load a checkpoint, handling privileged obs dimension mismatch.
-
-    Handles multiple generations of models:
-    - Walking models (no terrain_row, no height_scan)
-    - Stair v1 models (terrain_row but no height_scan)
-    - Stair v2 models (terrain_row + height_scan)
-
-    The critic input dim will differ between these. We detect this
-    and load actor weights while letting the critic re-initialise.
-    """
-    ckpt = torch.load(ckpt_path, map_location=gs.device, weights_only=False)
-
-    model_state = ckpt.get("model_state_dict", ckpt)
-
-    # Detect critic input dim from first critic layer weights
-    critic_key = None
-    for k in model_state:
-        if "critic" in k.lower() and "weight" in k.lower():
-            critic_key = k
-            break
-
-    mismatch = 0
-    if critic_key is not None:
-        saved_critic_in = model_state[critic_key].shape[1]
-        expected_critic_in = env.num_privileged_obs if env.num_privileged_obs else env.num_obs
-
-        if saved_critic_in != expected_critic_in:
-            mismatch = expected_critic_in - saved_critic_in
-            print("\n[COMPAT] Critic input dim mismatch detected:")
-            print(f"  Saved model expects : {saved_critic_in}")
-            print(f"  Current env provides: {expected_critic_in}")
-            print(f"  Difference          : {mismatch}")
-            if abs(mismatch) == 1:
-                print("  (likely: old model without terrain_row)")
-            elif abs(mismatch) == 77:
-                print("  (likely: old model without height_scan)")
-            elif abs(mismatch) == 78:
-                print("  (likely: walking model without terrain_row or height_scan)")
-            print("  Actor will load, critic will re-initialise.\n")
-
-    # Load via runner (handles actor, which has no dim change)
-    try:
-        runner.load(ckpt_path)
-    except RuntimeError as e:
-        if "size mismatch" in str(e).lower():
-            print(f"[COMPAT] Standard load failed ({e}), attempting partial load...")
-            _partial_load(runner, model_state)
-        else:
-            raise
-
-    return mismatch
-
-
-def _partial_load(runner, model_state):
-    """Load only the actor weights, skip mismatched critic layers."""
-    current_state = runner.alg.actor_critic.state_dict()
-
-    loaded_count = 0
-    skipped = []
-    for k, v in model_state.items():
-        if k in current_state:
-            if current_state[k].shape == v.shape:
-                current_state[k] = v
-                loaded_count += 1
-            else:
-                skipped.append(f"  {k}: saved={list(v.shape)} vs current={list(current_state[k].shape)}")
-        else:
-            skipped.append(f"  {k}: not in current model")
-
-    runner.alg.actor_critic.load_state_dict(current_state, strict=False)
-    print(f"[COMPAT] Partial load: {loaded_count} tensors loaded")
-    if skipped:
-        print(f"[COMPAT] Skipped {len(skipped)} tensors:")
-        for s in skipped[:10]:
-            print(s)
-        if len(skipped) > 10:
-            print(f"  ... and {len(skipped) - 10} more")
+    print(f"\n  >> Spawned on {label} at ({spawn_pos[0, 0]:.1f}, {spawn_pos[0, 1]:.1f}, {spawn_pos[0, 2]:.2f})")
 
 
 # =====================================================================
@@ -452,64 +490,14 @@ def _partial_load(runner, model_state):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-stairs-v3")
+    parser.add_argument("-e", "--exp_name", type=str, default="go2-terrain-v8")
     parser.add_argument("--ckpt", type=int, default=100)
-    parser.add_argument(
-        "--height",
-        type=float,
-        default=STAIR_HEIGHT,
-        help="Stair riser height in meters (0 = flat ground)",
-    )
-    parser.add_argument(
-        "--depth",
-        type=float,
-        default=STAIR_DEPTH,
-        help="Stair tread depth in meters",
-    )
-    parser.add_argument(
-        "--flights",
-        type=int,
-        default=NUM_FLIGHTS,
-        help="Number of up-down flight cycles",
-    )
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=NUM_STEPS_PER_FLIGHT,
-        help="Steps per flight",
-    )
     args = parser.parse_args()
 
     gs.init()
 
     log_dir = f"logs/{args.exp_name}"
     env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"{log_dir}/cfgs.pkl", "rb"))
-
-    # ================================================================
-    # Build single-row terrain with user-specified dimensions
-    # ================================================================
-    use_stairs = args.height > 0.001
-
-    if use_stairs:
-        env_cfg["terrain"] = {
-            "enabled": True,
-            "horizontal_scale": 0.05,
-            "vertical_scale": 0.005,
-            "num_difficulty_rows": 1,  # SINGLE ROW
-            "row_width_m": 6.0,
-            "step_depth_m": args.depth,
-            "num_steps": args.steps,
-            "num_flights": args.flights,
-            "step_height_min": args.height,  # exact height
-            "step_height_max": args.height,
-            "flat_before_m": 4.0,
-            "flat_top_m": 1.5,
-            "flat_gap_m": 1.5,
-            "flat_after_m": 2.0,
-        }
-    else:
-        if "terrain" in env_cfg:
-            env_cfg["terrain"]["enabled"] = False
 
     # ================================================================
     # Override env config for evaluation
@@ -552,7 +540,42 @@ def main():
     if "curriculum" in env_cfg:
         env_cfg["curriculum"]["enabled"] = False
 
-    # Disable termination
+    # Disable privileged obs — not needed for inference (only actor runs,
+    # not critic), and avoids dimension mismatch with old checkpoints
+    obs_cfg["num_privileged_obs"] = None
+
+    # ================================================================
+    # Terrain config — custom numpy heightmap for EXACT height control
+    # ================================================================
+    if TERRAIN_ENABLE:
+        hf = generate_heightmap(
+            MIN_HEIGHT,
+            MAX_HEIGHT,
+            TERRAIN_SIZE_X,
+            TERRAIN_SIZE_Y,
+            TERRAIN_HORIZONTAL_SCALE,
+            TERRAIN_SMOOTHING,
+        )
+
+        print("\n  Custom heightmap generated:")
+        print(f"    shape       : {hf.shape}")
+        print(f"    height range: [{hf.min():.4f}, {hf.max():.4f}] m")
+        print(f"    h_scale     : {TERRAIN_HORIZONTAL_SCALE} m/px")
+        print(f"    covers      : {TERRAIN_SIZE_X} x {TERRAIN_SIZE_Y} m")
+
+        env_cfg["terrain"] = {
+            "enabled": True,
+            "height_field": hf,
+            "horizontal_scale": TERRAIN_HORIZONTAL_SCALE,
+            "vertical_scale": 1.0,  # heights already in meters — no extra scaling
+            "spawn_height_offset": 0.05,
+            "boundary_margin": 1.0,
+            "terrain_name": None,  # don't cache — new terrain every run
+        }
+    else:
+        env_cfg["terrain"] = {"enabled": False}
+
+    # Disable termination (let it run forever for eval)
     env_cfg["termination_if_roll_greater_than"] = 1e9
     env_cfg["termination_if_pitch_greater_than"] = 1e9
     env_cfg["termination_if_z_vel_greater_than"] = 1e9
@@ -560,7 +583,7 @@ def main():
 
     reward_cfg["reward_scales"] = {}
 
-    # Initial pose overrides
+    # Initial pose overrides (only meaningful on flat terrain)
     if INIT_POS_ENABLE:
         env_cfg["base_init_pos"] = list(INIT_POS)
     if INIT_ORIENT_ENABLE:
@@ -583,22 +606,8 @@ def main():
         show_viewer=True,
     )
 
-    # Set Friction
-    if env._use_terrain:
-        env.ground.set_friction(GROUND_FRICTION)
-    else:
-        ground_entity = None
-        for ent in env.scene.entities:
-            try:
-                if hasattr(ent, "morph") and hasattr(ent.morph, "file"):
-                    if "plane.urdf" in ent.morph.file:
-                        ground_entity = ent
-                        break
-            except Exception:
-                pass
-        if ground_entity is not None:
-            ground_entity.set_friction(GROUND_FRICTION)
-
+    # Set Friction (env.ground works for both terrain and flat plane)
+    env.ground.set_friction(GROUND_FRICTION)
     env.robot.set_friction(ROBOT_FRICTION)
 
     if MOTOR_STRENGTH_ENABLE and pls_enabled:
@@ -607,11 +616,30 @@ def main():
         env._kd_factors[:] = 1.0
 
     # ================================================================
-    # Load Policy (with backward compatibility)
+    # Load Policy
     # ================================================================
     runner = OnPolicyRunner(env, train_cfg, log_dir, device=gs.device)
+
+    # Load checkpoint, skipping critic weights that don't match shape
+    # (old checkpoint has critic for 104 privileged obs, we only need actor)
     ckpt_path = os.path.join(log_dir, f"model_{args.ckpt}.pt")
-    priv_obs_mismatch = load_model_compat(runner, ckpt_path, env)
+    loaded = torch.load(ckpt_path, map_location=gs.device, weights_only=True)
+
+    model_dict = runner.alg.actor_critic.state_dict()
+    pretrained_dict = {}
+    skipped = []
+    for k, v in loaded["model_state_dict"].items():
+        if k in model_dict and model_dict[k].shape == v.shape:
+            pretrained_dict[k] = v
+        else:
+            skipped.append(k)
+    model_dict.update(pretrained_dict)
+    runner.alg.actor_critic.load_state_dict(model_dict)
+
+    if skipped:
+        print(f"  Skipped {len(skipped)} weight(s) with shape mismatch (critic): {skipped}")
+    print(f"  Loaded actor weights from: {ckpt_path}")
+
     policy = runner.get_inference_policy(device=gs.device)
 
     # ================================================================
@@ -650,40 +678,30 @@ def main():
     action_buffer = deque(maxlen=ACTION_DELAY_STEPS + 1)
 
     # ================================================================
-    # Reset
+    # Reset & initial terrain spawn
     # ================================================================
     obs, _ = env.reset()
-    env._lock_terrain_rows = True
 
     zero_action = torch.zeros((1, env.num_actions), device=gs.device)
     for _ in range(ACTION_DELAY_STEPS + 1):
         action_buffer.append(zero_action.clone())
+
+    # Spawn on terrain
+    if TERRAIN_ENABLE:
+        respawn_on_tile(env, TERRAIN_SELECTED_ROW, TERRAIN_SELECTED_COL)
+        obs, _ = env.get_observations()
 
     step = 0
 
     # ================================================================
     # Config Summary
     # ================================================================
-    print("\n" + "=" * 64)
-    print("  SIM EVALUATION — SINGLE TERRAIN + KEYBOARD CONTROL")
-    print("=" * 64)
-    if use_stairs:
-        print(f"  Stair height    : {args.height * 100:.1f}cm")
-        print(f"  Stair depth     : {args.depth * 100:.1f}cm")
-        print(f"  Flights         : {args.flights}  ({args.steps} steps each)")
-    else:
-        print("  Terrain         : FLAT (no stairs)")
+    print("\n" + "=" * 60)
+    print("  INFERENCE CONFIG (v9) — CUSTOM HEIGHTMAP + KEYBOARD")
+    print("=" * 60)
     print(f"  PLS enabled     : {pls_enabled}")
     print(f"  Action space    : {env.num_actions} ({'12 pos + 4 stiffness' if pls_enabled else '12 pos'})")
     print(f"  Actor obs dim   : {obs_cfg['num_obs']}")
-    print(f"  Critic obs dim  : {obs_cfg.get('num_privileged_obs', 'N/A')}")
-    print(f"  Terrain enabled : {env._use_terrain}")
-    if env._use_terrain:
-        print(f"  Terrain rows    : {env._num_terrain_rows}")
-        if hasattr(env, "_scan_n") and env._scan_n > 0:
-            print(f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points")
-    if priv_obs_mismatch != 0:
-        print(f"  Priv obs compat : mismatch={priv_obs_mismatch} (handled)")
     if not pls_enabled:
         print(f"  Kp / Kd         : {env_cfg['kp']} / {env_cfg['kd']}")
     else:
@@ -692,10 +710,22 @@ def main():
     print(f"  Obs noise       : {'ON' if OBS_NOISE_ENABLE else 'OFF'} level={OBS_NOISE_LEVEL}")
     print(f"  Action noise    : {'ON' if ACTION_NOISE_ENABLE else 'OFF'} std={ACTION_NOISE_STD}")
     print(f"  Action delay    : {'ON' if ACTION_DELAY_ENABLE else 'OFF'} steps={ACTION_DELAY_STEPS}")
-    print("=" * 64)
+
+    # Terrain summary
+    print("  ─── Terrain ───")
+    print(f"  Terrain         : {'CUSTOM HEIGHTMAP' if TERRAIN_ENABLE else 'OFF (flat plane)'}")
+    if TERRAIN_ENABLE:
+        print(f"  Bump range      : [{MIN_HEIGHT:.3f}, {MAX_HEIGHT:.3f}] m")
+        print(f"  Smoothing       : {TERRAIN_SMOOTHING}")
+        print(f"  Difficulty presets (press 1-{len(_TERRAIN_PRESETS)}):")
+        for i, p in enumerate(_TERRAIN_PRESETS):
+            marker = " <-- current" if i == 0 else ""
+            print(f"    [{i + 1}] {p['label']}{marker}")
+
+    print("=" * 60)
 
     print_controls()
-    print("Running evaluation with keyboard control...\n")
+    print("Running evaluation...\n")
 
     # ================================================================
     # Main Loop
@@ -710,16 +740,50 @@ def main():
                 if _quit_event.is_set():
                     break
 
-                # --- Check for respawn request ---
+                # --- Check for terrain respawn request ---
+                do_respawn = False
                 with _state_lock:
-                    if control_state["respawn_requested"]:
-                        control_state["respawn_requested"] = False
-                        print("\n[Respawn] Back to start")
-                        respawn_at_start(env)
-                        action_buffer.clear()
-                        for _ in range(ACTION_DELAY_STEPS + 1):
-                            action_buffer.append(zero_action.clone())
-                        obs, _ = env.get_observations()
+                    if terrain_state["respawn_requested"]:
+                        terrain_state["respawn_requested"] = False
+                        do_respawn = True
+                        respawn_row = terrain_state["row"]
+
+                if do_respawn and TERRAIN_ENABLE:
+                    # Generate new heightmap from preset
+                    preset = _TERRAIN_PRESETS[min(respawn_row, len(_TERRAIN_PRESETS) - 1)]
+                    new_hf = generate_heightmap(
+                        preset["min_h"],
+                        preset["max_h"],
+                        TERRAIN_SIZE_X,
+                        TERRAIN_SIZE_Y,
+                        TERRAIN_HORIZONTAL_SCALE,
+                        TERRAIN_SMOOTHING,
+                    )
+                    print(f"\n  New terrain: {preset['label']} [{new_hf.min():.4f}, {new_hf.max():.4f}] m")
+
+                    # Rebuild terrain in the scene
+                    # NOTE: This regenerates the heightmap. If your Go2Terrain
+                    # wrapper supports update_heightfield(), use that instead.
+                    # Otherwise we just respawn on the existing terrain.
+                    if hasattr(env, "terrain") and env.terrain is not None:
+                        if hasattr(env.terrain, "_height_field_np"):
+                            env.terrain._height_field_np = new_hf
+                        if hasattr(env.terrain, "_update_heightfield"):
+                            env.terrain._update_heightfield(new_hf)
+
+                    respawn_on_tile(env, 0, 0)
+                    obs, _ = env.get_observations()
+                    action_buffer.clear()
+                    for _ in range(ACTION_DELAY_STEPS + 1):
+                        action_buffer.append(zero_action.clone())
+                    continue
+                elif do_respawn:
+                    respawn_on_tile(env, 0, 0)
+                    obs, _ = env.get_observations()
+                    action_buffer.clear()
+                    for _ in range(ACTION_DELAY_STEPS + 1):
+                        action_buffer.append(zero_action.clone())
+                    continue
 
                 # --- Set command from keyboard state ---
                 target_cmd = make_command_tensor().to(gs.device)
@@ -821,13 +885,6 @@ def main():
                         f"z={pos[2].item():.3f}m, vel=[{vel[0].item():.2f},{vel[1].item():.2f},{vel[2].item():.2f}]"
                     )
 
-                    # Show terrain info with height-above-ground
-                    if env._use_terrain:
-                        if hasattr(env, "_get_terrain_height"):
-                            terrain_z = env._get_terrain_height(pos[0:1], pos[1:2]).item()
-                            hag = pos[2].item() - terrain_z
-                            parts.append(f"hag={hag:.3f}m")
-
                     if pls_enabled:
                         stiffness_actions = actions_to_apply[0, env.num_pos_actions :]
                         kp_per_leg = env.pls_kp_default + stiffness_actions * env.pls_kp_action_scale
@@ -836,6 +893,15 @@ def main():
                             f"Kp=[{kp_per_leg[0].item():.1f},{kp_per_leg[1].item():.1f},"
                             f"{kp_per_leg[2].item():.1f},{kp_per_leg[3].item():.1f}]"
                         )
+
+                    # Terrain info in debug line
+                    if TERRAIN_ENABLE and hasattr(env, "_ground_height"):
+                        with _state_lock:
+                            pr = terrain_state["row"]
+                        preset_label = _TERRAIN_PRESETS[min(pr, len(_TERRAIN_PRESETS) - 1)]["label"]
+                        ground_z = env._ground_height[0].item()
+                        h_above = pos[2].item() - ground_z
+                        parts.append(f"[{preset_label} h={h_above:.2f}m]")
 
                     print(
                         f"\r[step {step}] " + " | ".join(parts) + "    ",
@@ -846,7 +912,15 @@ def main():
                 # ==========================================================
                 #  STEP
                 # ==========================================================
-                obs, _, _, _ = env.step(actions_to_apply)
+                obs, _, rsets, _ = env.step(actions_to_apply)
+
+                # Auto-respawn if boundary reset triggered
+                if rsets[0].item():
+                    respawn_on_tile(env, 0, 0)
+                    obs, _ = env.get_observations()
+                    action_buffer.clear()
+                    for _ in range(ACTION_DELAY_STEPS + 1):
+                        action_buffer.append(zero_action.clone())
 
     except KeyboardInterrupt:
         pass
