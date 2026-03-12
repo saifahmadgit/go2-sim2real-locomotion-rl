@@ -36,11 +36,24 @@
    env for jump and crouch are the base env provided by Genesis and some modifications, In process of updating scripts to achieve sim to real transfer
    the walk and stair env are custom, Following commands can be used to train the policies
 
+   Walk:
    ```bash
-   walk - python3 examples/locomotion/final/go2_train_walk.py -e test1 --max_iterations 100
-   stair - python3 examples/locomotion/final/go2_train_stair.py -e test1 --max_iterations 100 --resume logs/go2-walk/model_188000.pt
-   crouch - python3 examples/locomotion/final/go2_train_crouch.py -e test1 --max_iterations 100
-   jump - python3 examples/locomotion/final/go2_train_crouch.py -e test1 --max_iterations 100
+   python3 examples/locomotion/final/go2_train_walk.py -e test1 --max_iterations 100
+   ```
+
+   Stair:
+   ```bash
+   python3 examples/locomotion/final/go2_train_stair.py -e test1 --max_iterations 100 --resume logs/go2-walk/model_188000.pt
+   ```
+
+   Crouch:
+   ```bash
+   python3 examples/locomotion/final/go2_train_crouch.py -e test1 --max_iterations 100
+   ```
+
+   Jump:
+   ```bash
+   python3 examples/locomotion/final/go2_train_crouch.py -e test1 --max_iterations 100
    ```
 
 9. Evaluation
@@ -52,9 +65,22 @@
 
    The checkpoins tat are working is included in the repo which can be directly run using following:
 
+   Walk:
    ```bash
-   Walk - python3 examples/locomotion/final/go2_eval_walk.py -e go2-walk --ckpt 188000
-   Stairs - python3 examples/locomotion/final/go2_eval_stairs.py -e go2-stairs --ckpt 104000
-   Crouch - python3 examples/locomotion/final/go2_eval_base.py -e go2-crouch --ckpt 2999
-   Jump  -  python3 examples/locomotion/final/go2_eval_base.py -e go2-jump --ckpt 999
+   python3 examples/locomotion/final/go2_eval_walk.py -e go2-walk --ckpt 188000
+   ```
+
+   Stairs:
+   ```bash
+   python3 examples/locomotion/final/go2_eval_stairs.py -e go2-stairs --ckpt 104000
+   ```
+
+   Crouch:
+   ```bash
+   python3 examples/locomotion/final/go2_eval_base.py -e go2-crouch --ckpt 2999
+   ```
+
+   Jump:
+   ```bash
+   python3 examples/locomotion/final/go2_eval_base.py -e go2-jump --ckpt 999
    ```
