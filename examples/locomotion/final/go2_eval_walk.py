@@ -398,7 +398,7 @@ def build_obs_noise_vec(obs_dim, noise_cfg, level):
 
 def respawn_on_tile(env, row, col):
     """Teleport the single eval robot to the center of the terrain or flat ground."""
-    terrain = env.terrain
+    terrain = getattr(env, "terrain", None)
 
     if terrain is None or not terrain.enabled:
         # Flat ground — just reset to default pos
@@ -576,6 +576,7 @@ def main():
         env_cfg["terrain"] = {"enabled": False}
 
     # Disable termination (let it run forever for eval)
+    env_cfg["episode_length_s"] = 100.0
     env_cfg["termination_if_roll_greater_than"] = 1e9
     env_cfg["termination_if_pitch_greater_than"] = 1e9
     env_cfg["termination_if_z_vel_greater_than"] = 1e9
@@ -740,51 +741,6 @@ def main():
                 if _quit_event.is_set():
                     break
 
-                # --- Check for terrain respawn request ---
-                do_respawn = False
-                with _state_lock:
-                    if terrain_state["respawn_requested"]:
-                        terrain_state["respawn_requested"] = False
-                        do_respawn = True
-                        respawn_row = terrain_state["row"]
-
-                if do_respawn and TERRAIN_ENABLE:
-                    # Generate new heightmap from preset
-                    preset = _TERRAIN_PRESETS[min(respawn_row, len(_TERRAIN_PRESETS) - 1)]
-                    new_hf = generate_heightmap(
-                        preset["min_h"],
-                        preset["max_h"],
-                        TERRAIN_SIZE_X,
-                        TERRAIN_SIZE_Y,
-                        TERRAIN_HORIZONTAL_SCALE,
-                        TERRAIN_SMOOTHING,
-                    )
-                    print(f"\n  New terrain: {preset['label']} [{new_hf.min():.4f}, {new_hf.max():.4f}] m")
-
-                    # Rebuild terrain in the scene
-                    # NOTE: This regenerates the heightmap. If your Go2Terrain
-                    # wrapper supports update_heightfield(), use that instead.
-                    # Otherwise we just respawn on the existing terrain.
-                    if hasattr(env, "terrain") and env.terrain is not None:
-                        if hasattr(env.terrain, "_height_field_np"):
-                            env.terrain._height_field_np = new_hf
-                        if hasattr(env.terrain, "_update_heightfield"):
-                            env.terrain._update_heightfield(new_hf)
-
-                    respawn_on_tile(env, 0, 0)
-                    obs, _ = env.get_observations()
-                    action_buffer.clear()
-                    for _ in range(ACTION_DELAY_STEPS + 1):
-                        action_buffer.append(zero_action.clone())
-                    continue
-                elif do_respawn:
-                    respawn_on_tile(env, 0, 0)
-                    obs, _ = env.get_observations()
-                    action_buffer.clear()
-                    for _ in range(ACTION_DELAY_STEPS + 1):
-                        action_buffer.append(zero_action.clone())
-                    continue
-
                 # --- Set command from keyboard state ---
                 target_cmd = make_command_tensor().to(gs.device)
                 env.commands[:] = target_cmd
@@ -913,14 +869,6 @@ def main():
                 #  STEP
                 # ==========================================================
                 obs, _, rsets, _ = env.step(actions_to_apply)
-
-                # Auto-respawn if boundary reset triggered
-                if rsets[0].item():
-                    respawn_on_tile(env, 0, 0)
-                    obs, _ = env.get_observations()
-                    action_buffer.clear()
-                    for _ in range(ACTION_DELAY_STEPS + 1):
-                        action_buffer.append(zero_action.clone())
 
     except KeyboardInterrupt:
         pass

@@ -42,7 +42,7 @@ YAW_CCW_WZ = 0.7
 STAIR_HEIGHT = 0.135  # riser height in meters
 STAIR_DEPTH = 0.39  # tread depth in meters
 NUM_FLIGHTS = 2  # number of up-down cycles
-NUM_STEPS_PER_FLIGHT = 10  # steps per flight
+NUM_STEPS_PER_FLIGHT = 40  # steps per flight
 
 # -------------------- 1. PD GAINS / STIFFNESS -----------------------
 KP = 60.0
@@ -515,6 +515,7 @@ def main():
     # Override env config for evaluation
     # ================================================================
     pls_enabled = env_cfg.get("pls_enable", False)
+    env_cfg["episode_length_s"] = 100.0
 
     if not pls_enabled:
         effective_kp = KP * (MOTOR_STRENGTH_SCALE if MOTOR_STRENGTH_ENABLE else 1.0)
