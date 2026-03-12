@@ -51,7 +51,7 @@ ROBOT_FRICTION = 0.7
 
 # -------------------- 3. EXTERNAL PUSHES ----------------------------
 PUSH_ENABLE = False
-PUSH_FORCE_RANGE = (200.0, 200.0)
+PUSH_FORCE_RANGE = (100.0, 100.0)
 PUSH_DURATION_S = [0.05, 0.15]
 PUSH_INTERVAL_S = 2.0
 PUSH_Z_SCALE = 0.0
