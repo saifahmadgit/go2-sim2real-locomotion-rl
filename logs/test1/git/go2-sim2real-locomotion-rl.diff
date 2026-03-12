@@ -1,0 +1,215 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   examples/locomotion/go2_eval_keyboard_stairs_4.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	examples/locomotion/final/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/examples/locomotion/go2_eval_keyboard_stairs_4.py b/examples/locomotion/go2_eval_keyboard_stairs_4.py
+index 6cad864..253a3d4 100644
+--- a/examples/locomotion/go2_eval_keyboard_stairs_4.py
++++ b/examples/locomotion/go2_eval_keyboard_stairs_4.py
+@@ -19,14 +19,13 @@ try:
+         if metadata.version("rsl-rl-lib") != "2.2.4":
+             raise ImportError
+ except (metadata.PackageNotFoundError, ImportError) as e:
+-    raise ImportError(
+-        "Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'."
+-    ) from e
++    raise ImportError("Please uninstall 'rsl_rl' and install 'rsl-rl-lib==2.2.4'.") from e
+ 
+-import genesis as gs
+ from go2_env_stair4 import Go2Env
+ from rsl_rl.runners import OnPolicyRunner
+ 
++import genesis as gs
++
+ # ============================================================
+ # PREDEFINED VELOCITIES
+ # ============================================================
+@@ -391,9 +390,7 @@ def load_model_compat(runner, ckpt_path, env):
+     mismatch = 0
+     if critic_key is not None:
+         saved_critic_in = model_state[critic_key].shape[1]
+-        expected_critic_in = (
+-            env.num_privileged_obs if env.num_privileged_obs else env.num_obs
+-        )
++        expected_critic_in = env.num_privileged_obs if env.num_privileged_obs else env.num_obs
+ 
+         if saved_critic_in != expected_critic_in:
+             mismatch = expected_critic_in - saved_critic_in
+@@ -434,9 +431,7 @@ def _partial_load(runner, model_state):
+                 current_state[k] = v
+                 loaded_count += 1
+             else:
+-                skipped.append(
+-                    f"  {k}: saved={list(v.shape)} vs current={list(current_state[k].shape)}"
+-                )
++                skipped.append(f"  {k}: saved={list(v.shape)} vs current={list(current_state[k].shape)}")
+         else:
+             skipped.append(f"  {k}: not in current model")
+ 
+@@ -488,9 +483,7 @@ def main():
+     gs.init()
+ 
+     log_dir = f"logs/{args.exp_name}"
+-    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(
+-        open(f"{log_dir}/cfgs.pkl", "rb")
+-    )
++    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"{log_dir}/cfgs.pkl", "rb"))
+ 
+     # ================================================================
+     # Build single-row terrain with user-specified dimensions
+@@ -651,9 +644,7 @@ def main():
+ 
+     gravity_obs_offset = None
+     if GRAVITY_OBS_OFFSET_ENABLE:
+-        gravity_obs_offset = torch.tensor(
+-            GRAVITY_OBS_OFFSET, device=gs.device, dtype=gs.tc_float
+-        ).unsqueeze(0)
++        gravity_obs_offset = torch.tensor(GRAVITY_OBS_OFFSET, device=gs.device, dtype=gs.tc_float).unsqueeze(0)
+ 
+     obs_noise_vec = None
+     action_buffer = deque(maxlen=ACTION_DELAY_STEPS + 1)
+@@ -683,38 +674,24 @@ def main():
+     else:
+         print("  Terrain         : FLAT (no stairs)")
+     print(f"  PLS enabled     : {pls_enabled}")
+-    print(
+-        f"  Action space    : {env.num_actions} "
+-        f"({'12 pos + 4 stiffness' if pls_enabled else '12 pos'})"
+-    )
++    print(f"  Action space    : {env.num_actions} ({'12 pos + 4 stiffness' if pls_enabled else '12 pos'})")
+     print(f"  Actor obs dim   : {obs_cfg['num_obs']}")
+     print(f"  Critic obs dim  : {obs_cfg.get('num_privileged_obs', 'N/A')}")
+     print(f"  Terrain enabled : {env._use_terrain}")
+     if env._use_terrain:
+         print(f"  Terrain rows    : {env._num_terrain_rows}")
+         if hasattr(env, "_scan_n") and env._scan_n > 0:
+-            print(
+-                f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points"
+-            )
++            print(f"  Height scan     : {env._scan_nx}×{env._scan_ny} = {env._scan_n} points")
+     if priv_obs_mismatch != 0:
+         print(f"  Priv obs compat : mismatch={priv_obs_mismatch} (handled)")
+     if not pls_enabled:
+         print(f"  Kp / Kd         : {env_cfg['kp']} / {env_cfg['kd']}")
+     else:
+-        print(
+-            f"  Kp              : policy-controlled "
+-            f"[{env_cfg['pls_kp_range'][0]}, {env_cfg['pls_kp_range'][1]}]"
+-        )
++        print(f"  Kp              : policy-controlled [{env_cfg['pls_kp_range'][0]}, {env_cfg['pls_kp_range'][1]}]")
+     print(f"  Friction        : ground={GROUND_FRICTION}, robot={ROBOT_FRICTION}")
+-    print(
+-        f"  Obs noise       : {'ON' if OBS_NOISE_ENABLE else 'OFF'} level={OBS_NOISE_LEVEL}"
+-    )
+-    print(
+-        f"  Action noise    : {'ON' if ACTION_NOISE_ENABLE else 'OFF'} std={ACTION_NOISE_STD}"
+-    )
+-    print(
+-        f"  Action delay    : {'ON' if ACTION_DELAY_ENABLE else 'OFF'} steps={ACTION_DELAY_STEPS}"
+-    )
++    print(f"  Obs noise       : {'ON' if OBS_NOISE_ENABLE else 'OFF'} level={OBS_NOISE_LEVEL}")
++    print(f"  Action noise    : {'ON' if ACTION_NOISE_ENABLE else 'OFF'} std={ACTION_NOISE_STD}")
++    print(f"  Action delay    : {'ON' if ACTION_DELAY_ENABLE else 'OFF'} steps={ACTION_DELAY_STEPS}")
+     print("=" * 64)
+ 
+     print_controls()
+@@ -767,21 +744,13 @@ def main():
+                 total_force = torch.zeros((1, 3), device=gs.device, dtype=gs.tc_float)
+                 apply_force = False
+ 
+-                if (
+-                    PUSH_ENABLE
+-                    and step % push_interval_steps == 0
+-                    and push_remaining == 0
+-                ):
++                if PUSH_ENABLE and step % push_interval_steps == 0 and push_remaining == 0:
+                     mag = rand_float(*PUSH_FORCE_RANGE, (1, 1)).to(gs.tc_float)
+                     theta = rand_float(0.0, 2.0 * math.pi, (1, 1))
+                     cached_push[0, 0] = torch.cos(theta) * mag
+                     cached_push[0, 1] = torch.sin(theta) * mag
+                     cached_push[0, 2] = PUSH_Z_SCALE * mag
+-                    push_remaining = int(
+-                        rand_int(
+-                            push_dur_steps_range[0], push_dur_steps_range[1], (1,)
+-                        ).item()
+-                    )
++                    push_remaining = int(rand_int(push_dur_steps_range[0], push_dur_steps_range[1], (1,)).item())
+ 
+                 if PUSH_ENABLE and push_remaining > 0:
+                     total_force += cached_push
+@@ -809,9 +778,7 @@ def main():
+ 
+                 if OBS_NOISE_ENABLE:
+                     if obs_noise_vec is None:
+-                        obs_noise_vec = build_obs_noise_vec(
+-                            obs.shape[-1], OBS_NOISE_STD, OBS_NOISE_LEVEL
+-                        )
++                        obs_noise_vec = build_obs_noise_vec(obs.shape[-1], OBS_NOISE_STD, OBS_NOISE_LEVEL)
+                     noise = torch.randn_like(obs) * obs_noise_vec
+                     policy_obs = policy_obs + noise
+ 
+@@ -825,9 +792,7 @@ def main():
+                 # ==========================================================
+                 if ACTION_NOISE_ENABLE:
+                     num_pos = env.num_pos_actions
+-                    pos_noise = (
+-                        torch.randn(1, num_pos, device=gs.device) * ACTION_NOISE_STD
+-                    )
++                    pos_noise = torch.randn(1, num_pos, device=gs.device) * ACTION_NOISE_STD
+                     action_noise = torch.zeros_like(raw_actions)
+                     action_noise[:, :num_pos] = pos_noise
+                     raw_actions = raw_actions + action_noise
+@@ -848,35 +813,25 @@ def main():
+                     parts = []
+ 
+                     cmd = target_cmd[0]
+-                    parts.append(
+-                        f"cmd=[{cmd[0].item():+.2f},{cmd[1].item():+.2f},{cmd[2].item():+.2f}]"
+-                    )
++                    parts.append(f"cmd=[{cmd[0].item():+.2f},{cmd[1].item():+.2f},{cmd[2].item():+.2f}]")
+ 
+                     pos = env.base_pos[0]
+                     vel = env.base_lin_vel[0]
+                     parts.append(
+-                        f"z={pos[2].item():.3f}m, "
+-                        f"vel=[{vel[0].item():.2f},{vel[1].item():.2f},{vel[2].item():.2f}]"
++                        f"z={pos[2].item():.3f}m, vel=[{vel[0].item():.2f},{vel[1].item():.2f},{vel[2].item():.2f}]"
+                     )
+ 
+                     # Show terrain info with height-above-ground
+                     if env._use_terrain:
+                         if hasattr(env, "_get_terrain_height"):
+-                            terrain_z = env._get_terrain_height(
+-                                pos[0:1], pos[1:2]
+-                            ).item()
++                            terrain_z = env._get_terrain_height(pos[0:1], pos[1:2]).item()
+                             hag = pos[2].item() - terrain_z
+                             parts.append(f"hag={hag:.3f}m")
+ 
+                     if pls_enabled:
+                         stiffness_actions = actions_to_apply[0, env.num_pos_actions :]
+-                        kp_per_leg = (
+-                            env.pls_kp_default
+-                            + stiffness_actions * env.pls_kp_action_scale
+-                        )
+-                        kp_per_leg = torch.clamp(
+-                            kp_per_leg, env.pls_kp_range[0], env.pls_kp_range[1]
+-                        )
++                        kp_per_leg = env.pls_kp_default + stiffness_actions * env.pls_kp_action_scale
++                        kp_per_leg = torch.clamp(kp_per_leg, env.pls_kp_range[0], env.pls_kp_range[1])
+                         parts.append(
+                             f"Kp=[{kp_per_leg[0].item():.1f},{kp_per_leg[1].item():.1f},"
+                             f"{kp_per_leg[2].item():.1f},{kp_per_leg[3].item():.1f}]"
