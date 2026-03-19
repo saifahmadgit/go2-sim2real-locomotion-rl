@@ -4,7 +4,9 @@ Reinforcement learning locomotion policies for the Unitree Go2 quadruped robot, 
 
 For hardware deployment, see the companion repo: [go2-sim2real-deploy](https://github.com/saifahmadgit/go2-sim2real-deploy)
 
-**Demo:** [YouTube](https://www.youtube.com/watch?v=nrwN8KrsD2c) | **Full write-up:** [Project Page](https://saifahmadgit.github.io/projects/quadruped-locomotion-rl/)
+**Full write-up:** [Project Page](https://saifahmadgit.github.io/projects/quadruped-locomotion-rl/)
+
+[![Demo Video](https://img.youtube.com/vi/nrwN8KrsD2c/maxresdefault.jpg)](https://www.youtube.com/watch?v=nrwN8KrsD2c)
 
 ---
 
@@ -93,6 +95,8 @@ For hardware deployment, see the companion repo: [go2-sim2real-deploy](https://g
 ---
 
 ## Implementation Details
+
+![System Architecture](imgs/architecture.png)
 
 ### Architecture
 
