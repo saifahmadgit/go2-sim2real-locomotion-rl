@@ -6,7 +6,8 @@ For hardware deployment, see the companion repo: [go2-sim2real-deploy](https://g
 
 **Full write-up:** [Project Page](https://saifahmadgit.github.io/projects/quadruped-locomotion-rl/)
 
-[![Demo Video](imgs/blockDiagram.png)](https://www.youtube.com/watch?v=nrwN8KrsD2c)
+[![Demo Video](https://img.youtube.com/vi/nrwN8KrsD2c/maxresdefault.jpg)](https://www.youtube.com/watch?v=nrwN8KrsD2c)
+▶ Click to watch on YouTube
 
 ---
 
